@@ -34,6 +34,32 @@ const EMBED_CHUNK_CHARS = 256 * 1024;
 const MAX_TOKENS = 256;
 
 /**
+ * Put back the [SEP] that transformers.js truncation cuts off.
+ *
+ * transformers.js 4.3.1 adds [CLS] and [SEP] and then cuts the whole sequence
+ * to max_length (tokenization_utils.js truncateHelper), so a document longer
+ * than MAX_TOKENS ends [CLS] + 255 word pieces with no [SEP]. Chroma's Rust
+ * tokenizer reserves room for both: [CLS] + 254 word pieces + [SEP]. The first
+ * 255 ids agree, so overwriting the last one with [SEP] yields Chroma's ids
+ * exactly. A row that already ends in [SEP] (a document of exactly
+ * MAX_TOKENS) is left alone, so this is a no-op once the library is fixed.
+ *
+ * `ids` and `mask` are row-major [rows, rowLength], as the tokenizer returns them.
+ */
+export function restoreTruncatedSep(
+  ids: BigInt64Array,
+  mask: BigInt64Array,
+  rowLength: number,
+  sepId: bigint,
+): void {
+  if (rowLength < MAX_TOKENS) return;
+  for (let row = 0; row < ids.length / rowLength; row++) {
+    const last = row * rowLength + MAX_TOKENS - 1;
+    if (mask[last] === 1n && ids[last] !== sepId) ids[last] = sepId;
+  }
+}
+
+/**
  * all-MiniLM-L6-v2 via transformers.js, in-process.
  *
  * Same model and dimensionality Chroma used (its default embedding function),
@@ -105,6 +131,12 @@ export class LocalEmbedder implements Embedder {
     const { tokenizer, model } = await this.ready();
     const { mean_pooling } = await import('@huggingface/transformers');
     const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: MAX_TOKENS });
+    restoreTruncatedSep(
+      inputs.input_ids.data,
+      inputs.attention_mask.data,
+      inputs.input_ids.dims[1],
+      BigInt(tokenizer.sep_token_id),
+    );
     const { last_hidden_state } = await model(inputs);
     // Unit-length, so cosine reduces to a dot product at query time.
     const flat = mean_pooling(last_hidden_state, inputs.attention_mask).normalize(2, -1).data as Float32Array;
