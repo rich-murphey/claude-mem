@@ -39,6 +39,7 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
   await client.query('BEGIN');
   try {
     await applyPhase1Migration(client);
+    await applyVectorSchema(client);
     await client.query('COMMIT');
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
@@ -58,6 +59,32 @@ async function applyPhase1Migration(client: PostgresQueryable): Promise<void> {
     `,
     [SERVER_POSTGRES_SCHEMA_VERSION, 'phase 1 postgres observation storage foundation']
   );
+}
+
+// Search by meaning needs the pgvector extension, which stock postgres images
+// do not ship (the compose file's postgres:17-alpine has none). Where it is
+// not installable the table is not created and search stays keyword-only, so
+// an existing deployment boots unchanged.
+async function applyVectorSchema(client: PostgresQueryable): Promise<void> {
+  const available = await client.query(
+    `SELECT 1 FROM pg_available_extensions WHERE name = 'vector'`
+  );
+  if (available.rows.length === 0) {
+    logger.info('SYSTEM', 'pgvector is not installed in this Postgres; search stays keyword-only');
+    return;
+  }
+  await client.query('CREATE EXTENSION IF NOT EXISTS vector');
+  // An extension lives in one schema per database. Installed earlier into a
+  // schema outside this connection's search_path, its type cannot be named
+  // here, so this schema goes without vectors rather than failing to boot.
+  const visible = await client.query<{ visible: boolean }>(
+    `SELECT to_regtype('vector') IS NOT NULL AS visible`
+  );
+  if (visible.rows[0]?.visible !== true) {
+    logger.warn('SYSTEM', 'pgvector is installed in a schema outside the search_path; search stays keyword-only');
+    return;
+  }
+  await client.query(VECTOR_SCHEMA_SQL);
 }
 
 interface PostgresPoolLike extends PostgresQueryable {
@@ -336,4 +363,22 @@ CREATE TABLE IF NOT EXISTS rate_limit_counters (
   PRIMARY KEY (subject_id, window_start)
 );
 CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window ON rate_limit_counters(window_start);
+`;
+
+// One vector per part of an observation (narrative, legacy text, each fact,
+// or each summary field), not per observation: all-MiniLM-L6-v2 reads 256
+// word pieces, about 1,000 characters, and observations average more than
+// that. Part names match the Chroma document suffixes (obs_<id>_<part>,
+// summary_<id>_<part>) so vectors carried over from Chroma line up.
+const VECTOR_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS observation_embeddings (
+  observation_id TEXT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+  part TEXT NOT NULL,
+  model TEXT NOT NULL,
+  embedding vector(384) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (observation_id, part)
+);
+CREATE INDEX IF NOT EXISTS idx_observation_embeddings_hnsw
+  ON observation_embeddings USING hnsw (embedding vector_cosine_ops);
 `;

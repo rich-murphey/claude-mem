@@ -12,6 +12,8 @@ import {
   toJsonObject
 } from './utils.js';
 import { normalizePlatformSourceOrNull } from '../../shared/platform-source.js';
+import { toVectorLiteral } from './observation-embeddings.js';
+import { withPostgresTransaction, type PostgresPool } from './pool.js';
 
 export type ObservationSourceType = 'agent_event' | 'session_summary' | 'observation_reindex' | 'manual';
 
@@ -67,6 +69,68 @@ interface ObservationSourceRow {
   source_id: string;
   metadata: unknown;
   created_at: Date;
+}
+
+// Every filter search() applies besides the text match: folder labels,
+// subagent exclusion and platform. Shared by the keyword and the hybrid
+// query so both legs of a hybrid search see the same rows. Expects
+// observations joined to server_sessions, and parameters $1 project,
+// $2 team, $5 platform, $6 folders, $7 excludeSubagents.
+const SEARCH_SCOPE_SQL = `
+  observations.project_id = $1
+  AND observations.team_id = $2
+  AND (
+    $6::text[] IS NULL
+    OR lower((observations.metadata->>'project') COLLATE "C") = ANY(
+      SELECT lower(folder COLLATE "C") FROM unnest($6::text[]) AS folder
+    )
+  )
+  AND (
+    NOT $7::boolean
+    OR NOT EXISTS (
+      SELECT 1
+      FROM observation_sources
+      INNER JOIN agent_events
+        ON agent_events.id = observation_sources.agent_event_id
+        AND agent_events.project_id = observations.project_id
+        AND agent_events.team_id = observations.team_id
+      WHERE observation_sources.observation_id = observations.id
+        AND observation_sources.source_type = 'agent_event'
+        AND COALESCE(agent_events.payload->>'agentId', '') <> ''
+        AND COALESCE(agent_events.payload->>'agentType', '') <> ''
+    )
+  )
+  AND (
+    $5::text IS NULL
+    OR server_sessions.platform_source = $5
+    OR (
+      observations.server_session_id IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM observation_sources
+        INNER JOIN agent_events
+          ON agent_events.id = observation_sources.agent_event_id
+          AND agent_events.project_id = observations.project_id
+          AND agent_events.team_id = observations.team_id
+        WHERE observation_sources.observation_id = observations.id
+          AND observation_sources.source_type = 'agent_event'
+          AND agent_events.platform_source = $5
+      )
+    )
+  )
+`;
+
+// Reciprocal rank fusion constant: the conventional 60 (Cormack et al. 2009).
+const RRF_K = 60;
+// Ranked candidates per leg of a hybrid search.
+const HYBRID_LEG_CANDIDATES = 100;
+// Nearest parts read from the HNSW index; several parts can belong to one
+// observation, so this is a multiple of HYBRID_LEG_CANDIDATES.
+const HYBRID_NEAREST_PARTS = 400;
+
+function isPool(client: PostgresQueryable): client is PostgresPool {
+  const candidate = client as { connect?: unknown; release?: unknown };
+  return typeof candidate.connect === 'function' && typeof candidate.release !== 'function';
 }
 
 export class PostgresObservationRepository {
@@ -173,6 +237,10 @@ export class PostgresObservationRepository {
   // agentId and an agentType (src/shared/subagent-predicate.ts). An agent id
   // alone is main-agent work (transcript-watch seats), and rows with no event
   // source (summaries, direct memories) always stay.
+  //
+  // `queryEmbedding` (the query's vector, from embedSearchQuery) turns a query
+  // search hybrid: see searchHybrid. Without it, or without a query, the read
+  // is the keyword/recency one below.
   async search(input: {
     projectId: string;
     teamId: string;
@@ -181,12 +249,27 @@ export class PostgresObservationRepository {
     platformSource?: string | null;
     folderProjects?: string[] | null;
     excludeSubagents?: boolean;
+    queryEmbedding?: ArrayLike<number> | null;
   }): Promise<PostgresObservation[]> {
     const platformSource = normalizePlatformSourceOrNull(input.platformSource);
     const query = input.query && input.query.trim().length > 0 ? input.query : null;
     const folderProjects = input.folderProjects && input.folderProjects.length > 0
       ? input.folderProjects
       : null;
+    if (query && input.queryEmbedding) {
+      return this.searchHybrid([
+        input.projectId,
+        input.teamId,
+        query,
+        input.limit ?? 20,
+        platformSource,
+        folderProjects,
+        input.excludeSubagents === true,
+        HYBRID_LEG_CANDIDATES,
+        toVectorLiteral(input.queryEmbedding),
+        HYBRID_NEAREST_PARTS,
+      ]);
+    }
     const result = await this.client.query<ObservationRow>(
       `
         SELECT observations.*,
@@ -196,48 +279,8 @@ export class PostgresObservationRepository {
           ON server_sessions.id = observations.server_session_id
           AND server_sessions.project_id = observations.project_id
           AND server_sessions.team_id = observations.team_id
-        WHERE observations.project_id = $1
-          AND observations.team_id = $2
+        WHERE ${SEARCH_SCOPE_SQL}
           AND ($3::text IS NULL OR observations.content_search @@ websearch_to_tsquery('english', $3))
-          AND (
-            $6::text[] IS NULL
-            OR lower((observations.metadata->>'project') COLLATE "C") = ANY(
-              SELECT lower(folder COLLATE "C") FROM unnest($6::text[]) AS folder
-            )
-          )
-          AND (
-            NOT $7::boolean
-            OR NOT EXISTS (
-              SELECT 1
-              FROM observation_sources
-              INNER JOIN agent_events
-                ON agent_events.id = observation_sources.agent_event_id
-                AND agent_events.project_id = observations.project_id
-                AND agent_events.team_id = observations.team_id
-              WHERE observation_sources.observation_id = observations.id
-                AND observation_sources.source_type = 'agent_event'
-                AND COALESCE(agent_events.payload->>'agentId', '') <> ''
-                AND COALESCE(agent_events.payload->>'agentType', '') <> ''
-            )
-          )
-          AND (
-            $5::text IS NULL
-            OR server_sessions.platform_source = $5
-            OR (
-              observations.server_session_id IS NULL
-              AND EXISTS (
-                SELECT 1
-                FROM observation_sources
-                INNER JOIN agent_events
-                  ON agent_events.id = observation_sources.agent_event_id
-                  AND agent_events.project_id = observations.project_id
-                  AND agent_events.team_id = observations.team_id
-                WHERE observation_sources.observation_id = observations.id
-                  AND observation_sources.source_type = 'agent_event'
-                  AND agent_events.platform_source = $5
-              )
-            )
-          )
         ORDER BY
           CASE WHEN $3::text IS NULL THEN observations.created_at END DESC,
           ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC,
@@ -254,6 +297,79 @@ export class PostgresObservationRepository {
         input.excludeSubagents === true,
       ]
     );
+    return result.rows.map(mapObservationRow);
+  }
+
+  // Keyword and vector ranking fused by reciprocal rank fusion. Each leg ranks
+  // its own candidates under the same scope filters; an observation scores
+  // 1/(k + rank) per leg it appears in, so one found by both outranks one found
+  // by either alone, and a paraphrase that matches no keyword is still found.
+  // The vector leg takes the nearest parts from the HNSW index and ranks an
+  // observation by its nearest part.
+  private async searchHybrid(params: unknown[]): Promise<PostgresObservation[]> {
+    const sql = `
+      WITH keyword AS (
+        SELECT observations.id,
+          row_number() OVER (
+            ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC,
+              observations.updated_at DESC
+          ) AS rank
+        FROM observations
+        LEFT JOIN server_sessions
+          ON server_sessions.id = observations.server_session_id
+          AND server_sessions.project_id = observations.project_id
+          AND server_sessions.team_id = observations.team_id
+        WHERE ${SEARCH_SCOPE_SQL}
+          AND observations.content_search @@ websearch_to_tsquery('english', $3)
+        ORDER BY rank
+        LIMIT $8
+      ),
+      nearest AS (
+        SELECT observation_id, embedding <=> $9::vector AS distance
+        FROM observation_embeddings
+        ORDER BY embedding <=> $9::vector
+        LIMIT $10
+      ),
+      semantic AS (
+        SELECT observations.id,
+          row_number() OVER (ORDER BY min(nearest.distance)) AS rank
+        FROM nearest
+        INNER JOIN observations ON observations.id = nearest.observation_id
+        LEFT JOIN server_sessions
+          ON server_sessions.id = observations.server_session_id
+          AND server_sessions.project_id = observations.project_id
+          AND server_sessions.team_id = observations.team_id
+        WHERE ${SEARCH_SCOPE_SQL}
+        GROUP BY observations.id
+        ORDER BY rank
+        LIMIT $8
+      ),
+      fused AS (
+        SELECT id, sum(1.0 / (${RRF_K} + rank)) AS score
+        FROM (SELECT id, rank FROM keyword UNION ALL SELECT id, rank FROM semantic) AS legs
+        GROUP BY id
+      )
+      SELECT observations.*,
+        COALESCE(NULLIF(server_sessions.content_session_id, ''), server_sessions.external_session_id) AS content_session_id
+      FROM fused
+      INNER JOIN observations ON observations.id = fused.id
+      LEFT JOIN server_sessions
+        ON server_sessions.id = observations.server_session_id
+        AND server_sessions.project_id = observations.project_id
+        AND server_sessions.team_id = observations.team_id
+      ORDER BY fused.score DESC, observations.updated_at DESC
+      LIMIT $4
+    `;
+    // An HNSW scan returns at most hnsw.ef_search rows (default 40), so the
+    // nearest-parts LIMIT is only honoured with ef_search raised to match.
+    // SET LOCAL needs a transaction, hence a dedicated connection from a pool.
+    const run = async (client: PostgresQueryable) => {
+      await client.query(`SET LOCAL hnsw.ef_search = ${HYBRID_NEAREST_PARTS}`);
+      return client.query<ObservationRow>(sql, params);
+    };
+    const result = isPool(this.client)
+      ? await withPostgresTransaction(this.client, run)
+      : await run(this.client);
     return result.rows.map(mapObservationRow);
   }
 }

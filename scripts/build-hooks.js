@@ -366,9 +366,16 @@ async function buildHooks() {
         '@derekstride/tree-sitter-sql': '^0.3.11',
         '@tree-sitter-grammars/tree-sitter-markdown': '^0.3.2',
         'shell-quote': '1.9.0',
+        // Search by meaning in the server runtime: LocalEmbedder loads it at
+        // the first embed, so it is external to server-service.cjs.
+        '@huggingface/transformers': '^4.2.0',
+        // Pinned, and overridden below: transformers pins 1.24.x exactly, and
+        // 1.24 dropped the darwin/x64 binary (see LocalEmbedder).
+        'onnxruntime-node': '1.21.0',
       },
       overrides: {
-        'tree-sitter': '^0.25.0'
+        'tree-sitter': '^0.25.0',
+        'onnxruntime-node': '1.21.0'
       },
       trustedDependencies: [
         'tree-sitter-cli'
@@ -532,6 +539,8 @@ async function buildHooks() {
         // bun:ffi backs Windows listen-socket HANDLE_FLAG_INHERIT clearing (#3300).
         'bun:ffi',
         'zod',
+        // Native onnxruntime underneath; installed from plugin/package.json.
+        '@huggingface/transformers',
       ],
       define: {
         '__DEFAULT_PACKAGE_VERSION__': `"${version}"`,
