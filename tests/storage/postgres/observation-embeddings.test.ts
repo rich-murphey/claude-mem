@@ -96,7 +96,7 @@ describe.skipIf(!testDatabaseUrl)('hybrid observation search', () => {
 
     const embeddings = new PostgresObservationEmbeddingsRepository(pool);
     const rows: Array<[string, string, number]> = [
-      ['indexer', 'The claude-context indexer runs nightly on dv.', 1],
+      ['indexer', 'The code-search indexer runs nightly on the build host.', 1],
       ['gateway', 'The gateway Worker moved to a custom domain.', 2],
       ['backup', 'Postgres is dumped before every schema change.', 3],
     ];
