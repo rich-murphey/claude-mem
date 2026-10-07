@@ -9636,7 +9636,7 @@ return ''
       INSERT INTO server_beta_schema_migrations (version, description)
       VALUES ($1, $2)
       ON CONFLICT (version) DO NOTHING
-    `,[gp,"phase 1 postgres observation storage foundation"])}async function DCe(t){if((await t.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rows.length===0){S.info("SYSTEM","pgvector is not installed in this Postgres; search stays keyword-only");return}await t.query(LCe)}function jCe(t){let e=t;return typeof e.connect=="function"&&typeof e.release!="function"&&typeof e.totalCount=="number"&&typeof e.idleCount=="number"&&typeof e.waitingCount=="number"}var gp,PCe,KCe,LCe,wR=k(()=>{"use strict";ie();gp=1,PCe=["server_beta_schema_migrations","teams","projects","team_members","api_keys","audit_log","server_sessions","agent_events","observation_generation_jobs","observations","observation_sources","observation_generation_job_events","usage_events","rate_limit_counters"];KCe=`
+    `,[gp,"phase 1 postgres observation storage foundation"])}async function DCe(t){if((await t.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rows.length===0){S.info("SYSTEM","pgvector is not installed in this Postgres; search stays keyword-only");return}if(await t.query("CREATE EXTENSION IF NOT EXISTS vector"),(await t.query("SELECT to_regtype('vector') IS NOT NULL AS visible")).rows[0]?.visible!==!0){S.warn("SYSTEM","pgvector is installed in a schema outside the search_path; search stays keyword-only");return}await t.query(LCe)}function jCe(t){let e=t;return typeof e.connect=="function"&&typeof e.release!="function"&&typeof e.totalCount=="number"&&typeof e.idleCount=="number"&&typeof e.waitingCount=="number"}var gp,PCe,KCe,LCe,wR=k(()=>{"use strict";ie();gp=1,PCe=["server_beta_schema_migrations","teams","projects","team_members","api_keys","audit_log","server_sessions","agent_events","observation_generation_jobs","observations","observation_sources","observation_generation_job_events","usage_events","rate_limit_counters"];KCe=`
 CREATE TABLE IF NOT EXISTS server_beta_schema_migrations (
   version INTEGER PRIMARY KEY,
   description TEXT NOT NULL,
@@ -9892,8 +9892,6 @@ CREATE TABLE IF NOT EXISTS rate_limit_counters (
 );
 CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window ON rate_limit_counters(window_start);
 `,LCe=`
-CREATE EXTENSION IF NOT EXISTS vector;
-
 CREATE TABLE IF NOT EXISTS observation_embeddings (
   observation_id TEXT NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
   part TEXT NOT NULL,
