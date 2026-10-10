@@ -32,6 +32,10 @@ export interface ClaudeObservationProviderOptions {
   // is appended), for deployments that don't call api.anthropic.com directly.
   // Defaults to the real Anthropic API.
   baseUrl?: string;
+  // `disabled` sends `thinking: {type: "disabled"}`. Claude Haiku 5.5 and later
+  // think adaptively by default and bill the reasoning as output tokens, which
+  // a summarisation job does not need. Unset leaves the model's default.
+  thinking?: 'disabled';
 }
 
 interface AnthropicMessagesResponse {
@@ -47,6 +51,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
   private readonly maxOutputTokens: number;
   private readonly fetchImpl: typeof fetch;
   private readonly messagesUrl: string;
+  private readonly thinking: 'disabled' | undefined;
 
   constructor(options: ClaudeObservationProviderOptions) {
     if (!options.apiKey) {
@@ -61,6 +66,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
     this.fetchImpl = options.fetchImpl ?? fetch;
     const baseUrl = (options.baseUrl?.trim() || ANTHROPIC_DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.messagesUrl = `${baseUrl}/v1/messages`;
+    this.thinking = options.thinking;
   }
 
   async generate(
@@ -169,6 +175,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
         max_tokens: this.maxOutputTokens,
         temperature: 0.3,
         messages: [{ role: 'user', content: prompt }],
+        ...(this.thinking === 'disabled' ? { thinking: { type: 'disabled' } } : {}),
       }),
       signal,
     });

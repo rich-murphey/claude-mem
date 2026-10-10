@@ -13,7 +13,7 @@ import { getRedisQueueConfig } from '../queue/redis-config.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ActiveServerGenerationWorkerManager } from './ActiveServerGenerationWorkerManager.js';
 import { backfillMissingEmbeddings } from '../services/ObservationEmbeddingService.js';
-import { ClaudeObservationProvider } from '../generation/providers/ClaudeObservationProvider.js';
+import { ClaudeObservationProvider, type ClaudeObservationProviderOptions } from '../generation/providers/ClaudeObservationProvider.js';
 import { ServerClassifiedProviderError } from '../generation/providers/shared/error-classification.js';
 import { GEMINI_API_URL, GeminiObservationProvider } from '../generation/providers/GeminiObservationProvider.js';
 import { OpenRouterObservationProvider } from '../generation/providers/OpenRouterObservationProvider.js';
@@ -383,10 +383,14 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
   if (provider === 'claude' || provider === 'anthropic') {
     const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.CLAUDE_MEM_ANTHROPIC_API_KEY ?? '';
     if (!apiKey) return null;
-    const opts: { apiKey: string; model?: string; maxOutputTokens?: number } = { apiKey };
+    const opts: ClaudeObservationProviderOptions = { apiKey };
     if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
     const maxOutputTokens = resolveServerMaxOutputTokens();
     if (maxOutputTokens !== undefined) opts.maxOutputTokens = maxOutputTokens;
+    // An Anthropic-compatible gateway in front of the API (e.g. Cloudflare AI
+    // Gateway, for request logs and cost), and the model's thinking mode.
+    if (process.env.CLAUDE_MEM_ANTHROPIC_BASE_URL) opts.baseUrl = process.env.CLAUDE_MEM_ANTHROPIC_BASE_URL;
+    if (process.env.CLAUDE_MEM_ANTHROPIC_THINKING === 'disabled') opts.thinking = 'disabled';
     return new ClaudeObservationProvider(opts);
   }
   if (provider === 'gemini') {
