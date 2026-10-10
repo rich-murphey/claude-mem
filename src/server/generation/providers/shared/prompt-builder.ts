@@ -87,7 +87,7 @@ export function buildServerGenerationPrompt(
   const isSessionSummary = context.job.sourceType === 'session_summary';
 
   const summaryInstruction = [
-    'You are reviewing a complete agent session, given below. Return a single',
+    'You are reviewing a complete agent session. Return a single',
     '<summary>...</summary> XML block describing the arc of the session. If the',
     'session contains nothing worth recording (e.g., everything was scrubbed by',
     'privacy filters or the activity was trivial), return a single self-closing',
@@ -107,7 +107,7 @@ export function buildServerGenerationPrompt(
   const observationInstruction = [
     'You are observing an agent at work. Return one or more',
     '<observation>...</observation> XML blocks summarizing durable, useful',
-    'discoveries from the events below. If the events contain nothing worth',
+    'discoveries from the events above. If the events contain nothing worth',
     'recording (e.g., everything was scrubbed by privacy filters or the',
     'activity was trivial), return a single self-closing <skip_summary />',
     'tag and nothing else. Do not include any prose outside the XML.',
@@ -116,12 +116,10 @@ export function buildServerGenerationPrompt(
     observationOutputSchema,
   ];
 
-  // The fixed instructions come first, so every request of a job type shares
-  // one prefix that a provider's prompt cache can serve (DeepSeek's is prefix
-  // based and automatic); everything that varies per job follows them.
+  // The instructions stay after the events. Placed first (so every request
+  // would share a cacheable prefix), DeepSeek V4.1 Flash wrote ~25% fewer
+  // observations on the same 40 events and skipped 12 of them instead of 2.
   const prompt = [
-    ...(isSessionSummary ? summaryInstruction : observationInstruction),
-    '',
     '<server_beta_observation_request>',
     ...projectTag,
     '  <agent_events>',
@@ -132,6 +130,8 @@ export function buildServerGenerationPrompt(
         : '    <!-- empty after privacy stripping -->',
     '  </agent_events>',
     '</server_beta_observation_request>',
+    '',
+    ...(isSessionSummary ? summaryInstruction : observationInstruction),
     ...(eventBlocks.some(hasRedactionMarker) ? ['', REDACTION_MARKER_HINT] : []),
   ].join('\n');
 

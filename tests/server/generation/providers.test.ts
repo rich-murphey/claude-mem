@@ -245,17 +245,6 @@ describe('buildServerGenerationPrompt', () => {
       expect(result.prompt).not.toContain(id);
     }
   });
-
-  it('puts the fixed instructions first, so jobs of one type share a cacheable prefix', () => {
-    for (const sourceType of ['agent_event', 'session_summary'] as const) {
-      const a = buildServerGenerationPrompt(makeContext({ sourceType, payload: 'first event' })).prompt;
-      const b = buildServerGenerationPrompt(makeContext({ sourceType, payload: 'second event' })).prompt;
-      const prefix = a.slice(0, a.indexOf('<server_beta_observation_request>'));
-      expect(prefix.length).toBeGreaterThan(200);
-      expect(prefix).toContain('<skip_summary />');
-      expect(b.startsWith(prefix)).toBe(true);
-    }
-  });
 });
 
 class FakeFetch {
