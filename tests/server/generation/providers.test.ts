@@ -331,6 +331,16 @@ describe('ClaudeObservationProvider', () => {
     expect(capturing.lastUrl).toBe('https://gateway.example.com/api/anthropic/v1/messages');
   });
 
+  it('sends thinking disabled only when configured', async () => {
+    for (const thinking of [undefined, 'disabled'] as const) {
+      const capturing = new CapturingFetch(jsonResponse(200, { content: [{ type: 'text', text: 'ok' }] }));
+      const provider = new ClaudeObservationProvider({ apiKey: 'sk-fake', fetchImpl: capturing.fetch, ...(thinking ? { thinking } : {}) });
+      await provider.generate(makeContext());
+      const body = JSON.parse(String(capturing.lastInit?.body));
+      expect(body.thinking).toEqual(thinking ? { type: 'disabled' } : undefined);
+    }
+  });
+
   it('trims whitespace and strips a trailing slash from baseUrl', async () => {
     const capturing = new CapturingFetch(jsonResponse(200, { content: [{ type: 'text', text: 'ok' }] }));
     const provider = new ClaudeObservationProvider({
