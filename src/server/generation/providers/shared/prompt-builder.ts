@@ -71,12 +71,12 @@ export function buildServerGenerationPrompt(
   // caller can refuse the call instead of buying that answer.
   const noEvents = context.events.length === 0;
 
-  const sessionTag = context.project.serverSessionId
-    ? `\n  <server_session_id>${escapeXml(context.project.serverSessionId)}</server_session_id>`
-    : '';
+  // Only the folder label helps the model; the project, team, session and job
+  // ids are opaque UUIDs it never needs, and nothing reads them back from the
+  // response (the job is identified by the BullMQ payload and the outbox row).
   const projectTag = context.project.projectName
-    ? `\n  <project_name>${escapeXml(context.project.projectName)}</project_name>`
-    : '';
+    ? [`  <project_name>${escapeXml(context.project.projectName)}</project_name>`]
+    : [];
 
   const observationOutputSchema = buildObservationOutputSchema(mode);
 
@@ -87,7 +87,7 @@ export function buildServerGenerationPrompt(
   const isSessionSummary = context.job.sourceType === 'session_summary';
 
   const summaryInstruction = [
-    'You are reviewing a complete agent session. Return a single',
+    'You are reviewing a complete agent session, given below. Return a single',
     '<summary>...</summary> XML block describing the arc of the session. If the',
     'session contains nothing worth recording (e.g., everything was scrubbed by',
     'privacy filters or the activity was trivial), return a single self-closing',
@@ -107,7 +107,7 @@ export function buildServerGenerationPrompt(
   const observationInstruction = [
     'You are observing an agent at work. Return one or more',
     '<observation>...</observation> XML blocks summarizing durable, useful',
-    'discoveries from the events above. If the events contain nothing worth',
+    'discoveries from the events below. If the events contain nothing worth',
     'recording (e.g., everything was scrubbed by privacy filters or the',
     'activity was trivial), return a single self-closing <skip_summary />',
     'tag and nothing else. Do not include any prose outside the XML.',
@@ -116,11 +116,14 @@ export function buildServerGenerationPrompt(
     observationOutputSchema,
   ];
 
+  // The fixed instructions come first, so every request of a job type shares
+  // one prefix that a provider's prompt cache can serve (DeepSeek's is prefix
+  // based and automatic); everything that varies per job follows them.
   const prompt = [
+    ...(isSessionSummary ? summaryInstruction : observationInstruction),
+    '',
     '<server_beta_observation_request>',
-    `  <project_id>${escapeXml(context.project.projectId)}</project_id>`,
-    `  <team_id>${escapeXml(context.project.teamId)}</team_id>` + sessionTag + projectTag,
-    `  <generation_job_id>${escapeXml(context.job.id)}</generation_job_id>`,
+    ...projectTag,
     '  <agent_events>',
     eventBlocks.length > 0
       ? eventBlocks.join('\n')
@@ -129,8 +132,6 @@ export function buildServerGenerationPrompt(
         : '    <!-- empty after privacy stripping -->',
     '  </agent_events>',
     '</server_beta_observation_request>',
-    '',
-    ...(isSessionSummary ? summaryInstruction : observationInstruction),
     ...(eventBlocks.some(hasRedactionMarker) ? ['', REDACTION_MARKER_HINT] : []),
   ].join('\n');
 
@@ -159,9 +160,7 @@ function buildEventBlock(event: PostgresAgentEvent): EventBlockResult {
   return {
     body: [
       '    <agent_event>',
-      `      <id>${escapeXml(event.id)}</id>`,
       `      <event_type>${escapeXml(event.eventType)}</event_type>`,
-      `      <source_adapter>${escapeXml(event.sourceAdapter)}</source_adapter>`,
       `      <occurred_at>${new Date(event.occurredAtEpoch).toISOString()}</occurred_at>`,
       '      <payload>',
       escapeXml(truncatedPayload),

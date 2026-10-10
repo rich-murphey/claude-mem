@@ -238,11 +238,23 @@ describe('buildServerGenerationPrompt', () => {
     expect(result.hadPrivateContent).toBe(true);
   });
 
-  it('includes generation_job_id and project metadata in the prompt', () => {
+  it('sends the folder label but none of the ids the model never needs', () => {
     const result = buildServerGenerationPrompt(makeContext({ serverSessionId: 'session-x' }));
-    expect(result.prompt).toContain('<generation_job_id>job-1</generation_job_id>');
-    expect(result.prompt).toContain('<server_session_id>session-x</server_session_id>');
     expect(result.prompt).toContain('<project_name>demo</project_name>');
+    for (const id of ['job-1', 'session-x', '<project_id>', '<team_id>', '<generation_job_id>', '<server_session_id>']) {
+      expect(result.prompt).not.toContain(id);
+    }
+  });
+
+  it('puts the fixed instructions first, so jobs of one type share a cacheable prefix', () => {
+    for (const sourceType of ['agent_event', 'session_summary'] as const) {
+      const a = buildServerGenerationPrompt(makeContext({ sourceType, payload: 'first event' })).prompt;
+      const b = buildServerGenerationPrompt(makeContext({ sourceType, payload: 'second event' })).prompt;
+      const prefix = a.slice(0, a.indexOf('<server_beta_observation_request>'));
+      expect(prefix.length).toBeGreaterThan(200);
+      expect(prefix).toContain('<skip_summary />');
+      expect(b.startsWith(prefix)).toBe(true);
+    }
   });
 });
 
