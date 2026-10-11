@@ -391,6 +391,10 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
     // Gateway, for request logs and cost), and the model's thinking mode.
     if (process.env.CLAUDE_MEM_ANTHROPIC_BASE_URL) opts.baseUrl = process.env.CLAUDE_MEM_ANTHROPIC_BASE_URL;
     if (process.env.CLAUDE_MEM_ANTHROPIC_THINKING === 'disabled') opts.thinking = 'disabled';
+    // `none` omits temperature, for models that reject it; a number sets it.
+    const temperature = process.env.CLAUDE_MEM_ANTHROPIC_TEMPERATURE?.trim();
+    if (temperature === 'none') opts.temperature = null;
+    else if (temperature && Number.isFinite(Number(temperature))) opts.temperature = Number(temperature);
     return new ClaudeObservationProvider(opts);
   }
   if (provider === 'gemini') {

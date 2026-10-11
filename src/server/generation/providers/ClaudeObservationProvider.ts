@@ -36,6 +36,10 @@ export interface ClaudeObservationProviderOptions {
   // think adaptively by default and bill the reasoning as output tokens, which
   // a summarisation job does not need. Unset leaves the model's default.
   thinking?: 'disabled';
+  // Sampling temperature; null leaves it out of the request. Claude Haiku 5.5
+  // rejects any temperature ("`temperature` is deprecated for this model").
+  // Defaults to 0.3.
+  temperature?: number | null;
 }
 
 interface AnthropicMessagesResponse {
@@ -52,6 +56,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
   private readonly fetchImpl: typeof fetch;
   private readonly messagesUrl: string;
   private readonly thinking: 'disabled' | undefined;
+  private readonly temperature: number | null;
 
   constructor(options: ClaudeObservationProviderOptions) {
     if (!options.apiKey) {
@@ -67,6 +72,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
     const baseUrl = (options.baseUrl?.trim() || ANTHROPIC_DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.messagesUrl = `${baseUrl}/v1/messages`;
     this.thinking = options.thinking;
+    this.temperature = options.temperature === undefined ? 0.3 : options.temperature;
   }
 
   async generate(
@@ -173,7 +179,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
       body: JSON.stringify({
         model: this.model,
         max_tokens: this.maxOutputTokens,
-        temperature: 0.3,
+        ...(this.temperature === null ? {} : { temperature: this.temperature }),
         messages: [{ role: 'user', content: prompt }],
         ...(this.thinking === 'disabled' ? { thinking: { type: 'disabled' } } : {}),
       }),

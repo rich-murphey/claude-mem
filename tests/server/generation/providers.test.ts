@@ -341,6 +341,15 @@ describe('ClaudeObservationProvider', () => {
     }
   });
 
+  it('sends temperature 0.3 by default and omits it when set to null', async () => {
+    for (const [temperature, expected] of [[undefined, 0.3], [null, undefined]] as const) {
+      const capturing = new CapturingFetch(jsonResponse(200, { content: [{ type: 'text', text: 'ok' }] }));
+      const provider = new ClaudeObservationProvider({ apiKey: 'sk-fake', fetchImpl: capturing.fetch, ...(temperature === undefined ? {} : { temperature }) });
+      await provider.generate(makeContext());
+      expect(JSON.parse(String(capturing.lastInit?.body)).temperature).toBe(expected);
+    }
+  });
+
   it('trims whitespace and strips a trailing slash from baseUrl', async () => {
     const capturing = new CapturingFetch(jsonResponse(200, { content: [{ type: 'text', text: 'ok' }] }));
     const provider = new ClaudeObservationProvider({
