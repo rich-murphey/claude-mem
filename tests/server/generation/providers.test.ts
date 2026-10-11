@@ -350,6 +350,19 @@ describe('ClaudeObservationProvider', () => {
     }
   });
 
+  it('sends extra headers without letting them replace the api key', async () => {
+    const capturing = new CapturingFetch(jsonResponse(200, { content: [{ type: 'text', text: 'ok' }] }));
+    const provider = new ClaudeObservationProvider({
+      apiKey: 'sk-fake',
+      fetchImpl: capturing.fetch,
+      extraHeaders: { 'cf-aig-authorization': 'Bearer gw', 'x-api-key': 'other' },
+    });
+    await provider.generate(makeContext());
+    const headers = capturing.lastInit?.headers as Record<string, string>;
+    expect(headers['cf-aig-authorization']).toBe('Bearer gw');
+    expect(headers['x-api-key']).toBe('sk-fake');
+  });
+
   it('trims whitespace and strips a trailing slash from baseUrl', async () => {
     const capturing = new CapturingFetch(jsonResponse(200, { content: [{ type: 'text', text: 'ok' }] }));
     const provider = new ClaudeObservationProvider({

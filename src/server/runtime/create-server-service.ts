@@ -395,6 +395,8 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
     const temperature = process.env.CLAUDE_MEM_ANTHROPIC_TEMPERATURE?.trim();
     if (temperature === 'none') opts.temperature = null;
     else if (temperature && Number.isFinite(Number(temperature))) opts.temperature = Number(temperature);
+    const extraHeaders = parseAnthropicExtraHeaders(process.env.CLAUDE_MEM_ANTHROPIC_EXTRA_HEADERS);
+    if (extraHeaders) opts.extraHeaders = extraHeaders;
     return new ClaudeObservationProvider(opts);
   }
   if (provider === 'gemini') {
@@ -436,6 +438,24 @@ export async function instantiateServerGenerationProvider(provider: string): Pro
     return loadCustomServerGenerationProvider();
   }
   return null;
+}
+
+// CLAUDE_MEM_ANTHROPIC_EXTRA_HEADERS: a JSON object of string header values.
+// Anything else is ignored with a warning that names the variable, never its
+// value, since it can carry a gateway token.
+export function parseAnthropicExtraHeaders(raw: string | undefined): Record<string, string> | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      && Object.values(parsed).every(v => typeof v === 'string')) {
+      return parsed as Record<string, string>;
+    }
+  } catch {
+    // fall through to the warning
+  }
+  logger.warn('SYSTEM', 'server: ignoring CLAUDE_MEM_ANTHROPIC_EXTRA_HEADERS: not a JSON object of string values');
+  return undefined;
 }
 
 // Queue manager selection is fail-fast on misconfiguration. If the user

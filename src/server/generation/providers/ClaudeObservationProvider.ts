@@ -40,6 +40,9 @@ export interface ClaudeObservationProviderOptions {
   // rejects any temperature ("`temperature` is deprecated for this model").
   // Defaults to 0.3.
   temperature?: number | null;
+  // Extra request headers, e.g. a Cloudflare AI Gateway's
+  // `cf-aig-authorization` and `cf-aig-collect-log-payload`.
+  extraHeaders?: Record<string, string>;
 }
 
 interface AnthropicMessagesResponse {
@@ -57,6 +60,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
   private readonly messagesUrl: string;
   private readonly thinking: 'disabled' | undefined;
   private readonly temperature: number | null;
+  private readonly extraHeaders: Record<string, string>;
 
   constructor(options: ClaudeObservationProviderOptions) {
     if (!options.apiKey) {
@@ -73,6 +77,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
     this.messagesUrl = `${baseUrl}/v1/messages`;
     this.thinking = options.thinking;
     this.temperature = options.temperature === undefined ? 0.3 : options.temperature;
+    this.extraHeaders = options.extraHeaders ?? {};
   }
 
   async generate(
@@ -172,6 +177,7 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
     return this.fetchImpl(this.messagesUrl, {
       method: 'POST',
       headers: {
+        ...this.extraHeaders,
         'Content-Type': 'application/json',
         'x-api-key': this.apiKey,
         'anthropic-version': ANTHROPIC_VERSION,
