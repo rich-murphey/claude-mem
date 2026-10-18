@@ -40,7 +40,7 @@ const TOOLS: Tool[] = [
   {
     name: 'search',
     description:
-      'Full-text search your claude-mem memory for a project. Returns matching observations (most relevant first).',
+      'Search your claude-mem memory for a project by keyword and, when the server has pgvector, by meaning, so a natural-language question works. Returns the nearest observations, most relevant first, with no relevance cutoff.',
     inputSchema: {
       type: 'object',
       properties: {
