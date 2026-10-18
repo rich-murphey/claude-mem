@@ -1,4 +1,5 @@
 import type { Embedder } from './types.js';
+import { DEFAULT_EMBEDDING_MODEL, type EmbeddingModel } from './models.js';
 
 /**
  * Documents per forward pass.
@@ -22,7 +23,8 @@ const EMBED_CHUNK_SIZE = 32;
 const EMBED_CHUNK_CHARS = 256 * 1024;
 
 /**
- * all-MiniLM-L6-v2 via transformers.js, in-process.
+ * all-MiniLM-L6-v2 (or another model from models.ts) via transformers.js,
+ * in-process.
  *
  * Same model and dimensionality Chroma used (its default embedding function),
  * so retrieval behaviour is unchanged — but produced in-process instead of by a
@@ -36,11 +38,16 @@ const EMBED_CHUNK_CHARS = 256 * 1024;
  * targets: {linux,darwin,win32} x {x64,arm64}.
  */
 export class LocalEmbedder implements Embedder {
-  readonly modelId = 'Xenova/all-MiniLM-L6-v2/fp32/mean/l2';
-  readonly dims = 384;
+  readonly modelId: string;
+  readonly dims: number;
 
   private extractor: unknown = null;
   private loading: Promise<unknown> | null = null;
+
+  constructor(private readonly model: EmbeddingModel = DEFAULT_EMBEDDING_MODEL) {
+    this.modelId = `${model.repo}/${model.dtype}/${model.pooling}/l2`;
+    this.dims = model.dims;
+  }
 
   /**
    * Model init costs ~3s, so it is deferred until something is actually
@@ -52,8 +59,8 @@ export class LocalEmbedder implements Embedder {
     if (!this.loading) {
       this.loading = (async () => {
         const { pipeline } = await import('@huggingface/transformers');
-        this.extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-          dtype: 'fp32',
+        this.extractor = await pipeline('feature-extraction', this.model.repo, {
+          dtype: this.model.dtype,
         });
         return this.extractor;
       })();
@@ -92,7 +99,7 @@ export class LocalEmbedder implements Embedder {
     const extractor = await this.ready();
     // pooling+normalize are done in the model graph, so vectors come back
     // unit-length and cosine reduces to a dot product at query time.
-    const out = await extractor(texts, { pooling: 'mean', normalize: true });
+    const out = await extractor(texts, { pooling: this.model.pooling, normalize: true });
     const flat = out.data as Float32Array;
     return texts.map((_, i) => {
       const slice = new Float32Array(this.dims);

@@ -45,8 +45,8 @@ USER node
 RUN cd /opt/claude-mem \
  && npm install --omit=dev --legacy-peer-deps
 
-# The embedding model search by meaning uses (LocalEmbedder's model, which this
-# must match), fetched into transformers.js's cache inside the image. Otherwise
+# The embedding model search by meaning uses (the default in
+# src/services/vector/models.ts, which this must match), fetched into transformers.js's cache inside the image. Otherwise
 # every new container downloads it at its first embed, and one without network
 # access searches by keyword only.
 RUN cd /opt/claude-mem \
