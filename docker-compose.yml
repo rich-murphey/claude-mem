@@ -53,7 +53,11 @@
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # postgres 17 with pgvector, which search by meaning needs; on a plain
+    # postgres image the server searches by keyword only. Debian-based, unlike
+    # postgres:17-alpine: a data volume created by the alpine image was sorted
+    # under musl's collation, so run REINDEX DATABASE once after switching.
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
