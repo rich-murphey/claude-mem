@@ -1,4 +1,5 @@
 import type { Embedder } from './types.js';
+import { DEFAULT_EMBEDDING_MODEL, type EmbeddingModel } from './models.js';
 
 /**
  * Documents per forward pass.
@@ -22,7 +23,8 @@ const EMBED_CHUNK_SIZE = 32;
 const EMBED_CHUNK_CHARS = 256 * 1024;
 
 /**
- * all-MiniLM-L6-v2 via transformers.js, in-process.
+ * all-MiniLM-L6-v2 (or another model from models.ts) via transformers.js,
+ * in-process.
  *
  * Same model and dimensionality Chroma used (its default embedding function),
  * so retrieval behaviour is unchanged — but produced in-process instead of by a
@@ -40,10 +42,8 @@ const EMBED_CHUNK_CHARS = 256 * 1024;
 const MAX_TOKENS = 256;
 
 export class LocalEmbedder implements Embedder {
-  // The token limit is part of the identity: the same model truncated
-  // elsewhere produces different vectors for long texts.
-  readonly modelId = `Xenova/all-MiniLM-L6-v2/fp32/mean/l2/${MAX_TOKENS}`;
-  readonly dims = 384;
+  readonly modelId: string;
+  readonly dims: number;
 
   private extractor: { tokenizer: any; model: any } | null = null;
   private loading: Promise<{ tokenizer: any; model: any }> | null = null;
@@ -52,7 +52,15 @@ export class LocalEmbedder implements Embedder {
    * `threads` caps onnxruntime's intra-op threads; unset, it takes every CPU
    * thread. Fixed when the model loads.
    */
-  constructor(readonly threads?: number) {}
+  constructor(
+    private readonly model: EmbeddingModel = DEFAULT_EMBEDDING_MODEL,
+    readonly threads?: number,
+  ) {
+    // The token limit is part of the identity: the same model truncated
+    // elsewhere produces different vectors for long texts.
+    this.modelId = `${model.repo}/${model.dtype}/${model.pooling}/l2/${MAX_TOKENS}`;
+    this.dims = model.dims;
+  }
 
   /**
    * Model init costs ~3s, so it is deferred until something is actually
@@ -65,9 +73,9 @@ export class LocalEmbedder implements Embedder {
       this.loading = (async () => {
         const { AutoModel, AutoTokenizer } = await import('@huggingface/transformers');
         this.extractor = {
-          tokenizer: await AutoTokenizer.from_pretrained('Xenova/all-MiniLM-L6-v2'),
-          model: await AutoModel.from_pretrained('Xenova/all-MiniLM-L6-v2', {
-            dtype: 'fp32',
+          tokenizer: await AutoTokenizer.from_pretrained(this.model.repo),
+          model: await AutoModel.from_pretrained(this.model.repo, {
+            dtype: this.model.dtype,
             ...(this.threads ? { session_options: { intraOpNumThreads: this.threads } } : {}),
           }),
         };
