@@ -14,16 +14,19 @@ import {
   type ObservationEmbeddingPart,
 } from '../../storage/postgres/observation-embeddings.js';
 import { LocalEmbedder } from '../../services/vector/LocalEmbedder.js';
+import { resolveEmbeddingModel } from '../../services/vector/models.js';
 import type { Embedder } from '../../services/vector/types.js';
 import { logger } from '../../utils/logger.js';
+import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 
 let sharedEmbedder: Embedder | null = null;
 // The most recent embed failure, cleared by the next success, so /v1/info can
 // say why search is keyword-only instead of leaving it to the log.
 let lastEmbedError: { message: string; at: string } | null = null;
 
+/** The embedder for CLAUDE_MEM_EMBEDDING_MODEL; an unknown model name throws. */
 export function getSharedEmbedder(): Embedder {
-  sharedEmbedder ??= new LocalEmbedder();
+  sharedEmbedder ??= new LocalEmbedder(resolveEmbeddingModel(SettingsDefaultsManager.get('CLAUDE_MEM_EMBEDDING_MODEL')));
   return sharedEmbedder;
 }
 
@@ -66,7 +69,7 @@ export async function embedSearchQuery(
   if (!query || query.trim().length === 0) return null;
   try {
     if (!(await vectorSearchAvailable(client))) return null;
-    const [vector] = await embedder.embed([query]);
+    const [vector] = await embedder.embed([query], 'query');
     lastEmbedError = null;
     return vector ? { vector, model: embedder.modelId } : null;
   } catch (error) {
@@ -77,7 +80,10 @@ export async function embedSearchQuery(
   }
 }
 
+/** One row's vectors, shaped for PostgresObservationEmbeddingsRepository.upsert. */
 export interface EmbeddedParts {
+  /** The model that made these vectors. */
+  model: string;
   parts: ObservationEmbeddingPart[];
   vectors: Float32Array[];
 }
@@ -102,7 +108,7 @@ export async function embedObservationRows(
     return partsPerRow.map(parts => {
       const slice = vectors.slice(offset, offset + parts.length);
       offset += parts.length;
-      return { parts, vectors: slice };
+      return { model: embedder.modelId, parts, vectors: slice };
     });
   } catch (error) {
     logger.warn('SYSTEM', 'observation embedding failed; rows are written without vectors', {
@@ -137,10 +143,9 @@ export async function backfillMissingEmbeddings(
     const embedded = await embedObservationRows(client, rows, embedder);
     if (!embedded) break;
     for (let i = 0; i < rows.length; i++) {
-      const { parts, vectors } = embedded[i]!;
-      await repo.upsert({ observationId: rows[i]!.id, model: embedder.modelId, parts, vectors });
+      await repo.upsert({ observationId: rows[i]!.id, ...embedded[i]! });
       totals.observations++;
-      totals.parts += parts.length;
+      totals.parts += embedded[i]!.parts.length;
     }
   }
   if (totals.observations > 0) {

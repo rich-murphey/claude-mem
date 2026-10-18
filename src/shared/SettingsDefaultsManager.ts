@@ -292,6 +292,7 @@ export interface SettingsDefaults {
   CLAUDE_MEM_CHROMA_MUTATION_TIMEOUT_MS: string;
   CLAUDE_MEM_CHROMA_MAX_PENDING_MUTATIONS: string;
   CLAUDE_MEM_CHROMA_EMBEDDING_FUNCTION: string;  // chroma-mcp embedding function for new collections
+  CLAUDE_MEM_EMBEDDING_MODEL: string;            // in-process embedding model for server search by meaning
   CLAUDE_MEM_CHROMA_UVX_PATH: string;            // uvx binary (or its folder) to launch chroma-mcp with
   CLAUDE_MEM_SEARCH_RECENCY_DAYS: string;        // Implicit 90-day recency window on date-less semantic searches (#4770); 0 = no window
   // Worker-native cloud sync. Active ⇔ TOKEN, USER_ID, and HUB_URL are all
@@ -560,6 +561,13 @@ export class SettingsDefaultsManager {
     // memory text to that vendor. Any other value is rejected. Applies to new
     // collections only — changing it requires re-indexing.
     CLAUDE_MEM_CHROMA_EMBEDDING_FUNCTION: 'default',
+    // Embedding model the server's search by meaning uses. 'all-MiniLM-L6-v2'
+    // is Chroma's default (English-tuned); 'paraphrase-multilingual-MiniLM-L12-v2'
+    // and 'multilingual-e5-small' are multilingual. All three run locally and
+    // produce 384 dimensions. Any other value is rejected. Changing it
+    // re-embeds every observation, and search by meaning covers only rows
+    // already re-embedded until that finishes.
+    CLAUDE_MEM_EMBEDDING_MODEL: 'all-MiniLM-L6-v2',
     CLAUDE_MEM_CHROMA_UVX_PATH: '',            // Empty = search uv's install folders, then PATH (#4195)
     CLAUDE_MEM_SEARCH_RECENCY_DAYS: '90',      // Date-less semantic search only ranks matches from the last N days (#4770). 0 = no window (every match eligible); an explicit dateStart/dateEnd always wins. Restart the worker after changing it
     // Worker-native cloud sync: credentials come from cmem.ai → Connect.

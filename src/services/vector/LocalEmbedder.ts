@@ -41,11 +41,13 @@ export class LocalEmbedder implements Embedder {
   readonly modelId: string;
   readonly dims: number;
 
-  private extractor: unknown = null;
-  private loading: Promise<unknown> | null = null;
+  private extractor: { tokenizer: any; model: any } | null = null;
+  private loading: Promise<{ tokenizer: any; model: any }> | null = null;
 
   constructor(private readonly model: EmbeddingModel = DEFAULT_EMBEDDING_MODEL) {
-    this.modelId = `${model.repo}/${model.dtype}/${model.pooling}/l2`;
+    // The token limit is part of the identity: the same model truncated
+    // elsewhere produces different vectors for long texts.
+    this.modelId = `${model.repo}/${model.dtype}/${model.pooling}/l2/${model.maxTokens}`;
     this.dims = model.dims;
   }
 
@@ -54,22 +56,25 @@ export class LocalEmbedder implements Embedder {
    * embedded — a worker that only reads never pays it. Concurrent callers
    * share one in-flight load rather than racing to initialise twice.
    */
-  private async ready(): Promise<any> {
+  private async ready(): Promise<{ tokenizer: any; model: any }> {
     if (this.extractor) return this.extractor;
     if (!this.loading) {
       this.loading = (async () => {
-        const { pipeline } = await import('@huggingface/transformers');
-        this.extractor = await pipeline('feature-extraction', this.model.repo, {
-          dtype: this.model.dtype,
-        });
+        const { AutoModel, AutoTokenizer } = await import('@huggingface/transformers');
+        this.extractor = {
+          tokenizer: await AutoTokenizer.from_pretrained(this.model.repo),
+          model: await AutoModel.from_pretrained(this.model.repo, { dtype: this.model.dtype }),
+        };
         return this.extractor;
       })();
     }
     return this.loading;
   }
 
-  async embed(texts: string[]): Promise<Float32Array[]> {
+  async embed(texts: string[], role: 'query' | 'passage' = 'passage'): Promise<Float32Array[]> {
     if (texts.length === 0) return [];
+    const prefix = role === 'query' ? this.model.queryPrefix : this.model.passagePrefix;
+    if (prefix) texts = texts.map(text => prefix + text);
     const vectors: Float32Array[] = [];
     let start = 0;
     while (start < texts.length) {
@@ -95,16 +100,48 @@ export class LocalEmbedder implements Embedder {
     return end;
   }
 
+  /**
+   * The tokenizer and model are called directly, not through the
+   * feature-extraction pipeline, which truncates at the tokenizer's
+   * model_max_length (512) rather than the length the model was trained at:
+   * for all-MiniLM-L6-v2 that is 256, which Chroma uses, and a text of 936 to
+   * 1,716 tokens embedded at 512 came out at cosine 0.79 to 0.83 from Chroma's
+   * vector. Truncation also drops the closing [SEP] (or </s>), which
+   * transformers.js 4.3.1 adds before cutting (huggingface/tokenizers.js#41);
+   * it is restored here. With both, vectors match Chroma's to cosine 0.9999995.
+   */
   protected async encode(texts: string[]): Promise<Float32Array[]> {
-    const extractor = await this.ready();
-    // pooling+normalize are done in the model graph, so vectors come back
-    // unit-length and cosine reduces to a dot product at query time.
-    const out = await extractor(texts, { pooling: this.model.pooling, normalize: true });
-    const flat = out.data as Float32Array;
-    return texts.map((_, i) => {
-      const slice = new Float32Array(this.dims);
-      slice.set(flat.subarray(i * this.dims, (i + 1) * this.dims));
-      return slice;
+    const { tokenizer, model } = await this.ready();
+    const maxTokens = this.model.maxTokens;
+    const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: maxTokens });
+    const [rows, width] = inputs.input_ids.dims as number[];
+    const ids = inputs.input_ids.data as BigInt64Array;
+    const mask = inputs.attention_mask.data as BigInt64Array;
+    const sep = BigInt(tokenizer.sep_token_id);
+    if (width === maxTokens) {
+      for (let r = 0; r < rows; r++) {
+        const last = r * width + maxTokens - 1;
+        if (mask[last] === 1n && ids[last] !== sep) ids[last] = sep;
+      }
+    }
+    const { last_hidden_state: hidden } = await model(inputs);
+    const h = hidden.data as Float32Array;
+    // Mean over the real tokens, then unit length, so cosine reduces to a dot
+    // product at query time.
+    return texts.map((_, r) => {
+      const v = new Float32Array(this.dims);
+      let n = 0;
+      for (let t = 0; t < width; t++) {
+        if (mask[r * width + t] !== 1n) continue;
+        n++;
+        const base = (r * width + t) * this.dims;
+        for (let d = 0; d < this.dims; d++) v[d] += h[base + d];
+      }
+      let norm = 0;
+      for (let d = 0; d < this.dims; d++) { v[d] /= n; norm += v[d] * v[d]; }
+      norm = Math.sqrt(norm);
+      for (let d = 0; d < this.dims; d++) v[d] /= norm;
+      return v;
     });
   }
 }

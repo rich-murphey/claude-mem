@@ -20,7 +20,6 @@ import { PostgresObservationRepository } from '../../../storage/postgres/observa
 import {
   embedObservationRows,
   embedSearchQuery,
-  getSharedEmbedder,
 } from '../../services/ObservationEmbeddingService.js';
 import { PostgresObservationEmbeddingsRepository } from '../../../storage/postgres/observation-embeddings.js';
 import { PostgresProjectsRepository } from '../../../storage/postgres/projects.js';
@@ -932,14 +931,9 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           const embedded = await embedObservationRows(this.options.pool, [createInput]);
           const observation = await repo.create(createInput);
           if (observation.id === createInput.id) {
-            const vectors = embedded?.[0];
-            if (vectors && vectors.parts.length > 0) {
-              await new PostgresObservationEmbeddingsRepository(this.options.pool).upsert({
-                observationId: observation.id,
-                model: getSharedEmbedder().modelId,
-                parts: vectors.parts,
-                vectors: vectors.vectors,
-              });
+            if (embedded) {
+              await new PostgresObservationEmbeddingsRepository(this.options.pool)
+                .upsert({ observationId: observation.id, ...embedded[0]! });
             }
             await this.auditWrite(req, 'memory.write', observation.id, observation.projectId);
             res.status(201).json({ memory: serializeObservation(observation) });
