@@ -45,12 +45,14 @@ USER node
 RUN cd /opt/claude-mem \
  && npm install --omit=dev --legacy-peer-deps
 
-# The embedding model search by meaning uses (the default in
-# src/services/vector/models.ts, which this must match), fetched into transformers.js's cache inside the image. Otherwise
-# every new container downloads it at its first embed, and one without network
-# access searches by keyword only.
+# The embedding model search by meaning uses, fetched into transformers.js's
+# cache inside the image; otherwise every new container downloads it at its
+# first embed, and one without network access searches by keyword only. The
+# default is the `repo` of the default model in src/services/vector/models.ts;
+# pass the repo of the model CLAUDE_MEM_EMBEDDING_MODEL names to bake that one.
+ARG EMBEDDING_REPO=Xenova/all-MiniLM-L6-v2
 RUN cd /opt/claude-mem \
- && node -e "import('@huggingface/transformers').then(t => t.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { dtype: 'fp32' }))"
+ && node -e "import('@huggingface/transformers').then(t => t.pipeline('feature-extraction', process.argv[1], { dtype: 'fp32' }))" "$EMBEDDING_REPO"
 
 USER root
 RUN mkdir -p /home/node/.claude /home/node/.claude-mem /data/claude-mem \
