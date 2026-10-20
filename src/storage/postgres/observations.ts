@@ -13,7 +13,8 @@ import {
 } from './utils.js';
 import { normalizePlatformSourceOrNull } from '../../shared/platform-source.js';
 import { toVectorLiteral } from './observation-embeddings.js';
-import { withPostgresTransaction, type PostgresPool } from './pool.js';
+import { withPostgresTransaction } from './pool.js';
+import { isPostgresPool } from './schema.js';
 
 export type ObservationSourceType = 'agent_event' | 'session_summary' | 'observation_reindex' | 'manual';
 
@@ -83,8 +84,8 @@ const SERVER_SESSION_JOIN = `
 // Every filter search() applies besides the text match: summary kind,
 // folder labels, subagent exclusion and platform. Shared by the keyword and
 // the hybrid query so both legs of a hybrid search see the same rows. Expects
-// SERVER_SESSION_JOIN, and parameters $1 project,
-// $2 team, $5 platform, $6 folders, $7 excludeSubagents, $8 summary.
+// SERVER_SESSION_JOIN, and parameters $1 project, $2 team, $5 platform,
+// $6 folders, $7 excludeSubagents, $8 summary.
 const SEARCH_SCOPE_SQL = `
   observations.project_id = $1
   AND observations.team_id = $2
@@ -171,11 +172,6 @@ const HYBRID_LEG_CANDIDATES = 100;
 // Nearest parts read from the HNSW index; several parts can belong to one
 // observation, so this is a multiple of HYBRID_LEG_CANDIDATES.
 const HYBRID_NEAREST_PARTS = 400;
-
-function isPool(client: PostgresQueryable): client is PostgresPool {
-  const candidate = client as { connect?: unknown; release?: unknown };
-  return typeof candidate.connect === 'function' && typeof candidate.release !== 'function';
-}
 
 export class PostgresObservationRepository {
   constructor(private client: PostgresQueryable) {}
@@ -302,21 +298,20 @@ export class PostgresObservationRepository {
     const folderProjects = input.folderProjects && input.folderProjects.length > 0
       ? input.folderProjects
       : null;
+    // $1-$9, shared by the keyword and the hybrid query.
+    const params = [
+      input.projectId,
+      input.teamId,
+      query,
+      input.limit ?? 20,
+      platformSource,
+      folderProjects,
+      input.excludeSubagents === true,
+      input.summary ?? null,
+      mayWidenQuery(query),
+    ];
     if (query && input.queryEmbedding) {
-      return this.searchHybrid([
-        input.projectId,
-        input.teamId,
-        query,
-        input.limit ?? 20,
-        platformSource,
-        folderProjects,
-        input.excludeSubagents === true,
-        input.summary ?? null,
-        HYBRID_LEG_CANDIDATES,
-        toVectorLiteral(input.queryEmbedding.vector),
-        HYBRID_NEAREST_PARTS,
-        input.queryEmbedding.model,
-      ]);
+      return this.searchHybrid(params, input.queryEmbedding);
     }
     const result = await this.client.query<ObservationRow>(
       `
@@ -334,17 +329,7 @@ export class PostgresObservationRepository {
           observations.updated_at DESC
         LIMIT $4
       `,
-      [
-        input.projectId,
-        input.teamId,
-        query,
-        input.limit ?? 20,
-        platformSource,
-        folderProjects,
-        input.excludeSubagents === true,
-        input.summary ?? null,
-        mayWidenQuery(query),
-      ]
+      params
     );
     return result.rows.map(mapObservationRow);
   }
@@ -357,44 +342,44 @@ export class PostgresObservationRepository {
   // ranks an observation by its nearest part. Only parts from the query's own
   // model are compared: while rows are re-embedded after a model change, the
   // others are in another model's space, where distance means nothing.
-  private async searchHybrid(params: unknown[]): Promise<PostgresObservation[]> {
+  // Expects search()'s $1-$9; adds $10 the query vector and $11 its model.
+  private async searchHybrid(
+    params: unknown[],
+    queryEmbedding: { vector: ArrayLike<number>; model: string },
+  ): Promise<PostgresObservation[]> {
     const sql = `
-      WITH keyword AS (
+      WITH ${SEARCH_QUERY_SQL},
+      keyword AS (
         SELECT observations.id,
           row_number() OVER (
-            ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC,
+            ORDER BY ts_rank(observations.content_search, search_query.tsq) DESC,
               observations.updated_at DESC
           ) AS rank
         FROM observations
-        LEFT JOIN server_sessions
-          ON server_sessions.id = observations.server_session_id
-          AND server_sessions.project_id = observations.project_id
-          AND server_sessions.team_id = observations.team_id
+        CROSS JOIN search_query
+        ${SERVER_SESSION_JOIN}
         WHERE ${SEARCH_SCOPE_SQL}
-          AND observations.content_search @@ websearch_to_tsquery('english', $3)
+          AND observations.content_search @@ search_query.tsq
         ORDER BY rank
-        LIMIT $9
+        LIMIT ${HYBRID_LEG_CANDIDATES}
       ),
       nearest AS (
         SELECT observation_id, embedding <=> $10::vector AS distance
         FROM observation_embeddings
-        WHERE project_id = $1 AND team_id = $2 AND model = $12
+        WHERE project_id = $1 AND team_id = $2 AND model = $11
         ORDER BY embedding <=> $10::vector
-        LIMIT $11
+        LIMIT ${HYBRID_NEAREST_PARTS}
       ),
       semantic AS (
         SELECT observations.id,
           row_number() OVER (ORDER BY min(nearest.distance)) AS rank
         FROM nearest
         INNER JOIN observations ON observations.id = nearest.observation_id
-        LEFT JOIN server_sessions
-          ON server_sessions.id = observations.server_session_id
-          AND server_sessions.project_id = observations.project_id
-          AND server_sessions.team_id = observations.team_id
+        ${SERVER_SESSION_JOIN}
         WHERE ${SEARCH_SCOPE_SQL}
         GROUP BY observations.id
         ORDER BY rank
-        LIMIT $9
+        LIMIT ${HYBRID_LEG_CANDIDATES}
       ),
       fused AS (
         SELECT id, sum(1.0 / (${RRF_K} + rank)) AS score
@@ -405,10 +390,7 @@ export class PostgresObservationRepository {
         COALESCE(NULLIF(server_sessions.content_session_id, ''), server_sessions.external_session_id) AS content_session_id
       FROM fused
       INNER JOIN observations ON observations.id = fused.id
-      LEFT JOIN server_sessions
-        ON server_sessions.id = observations.server_session_id
-        AND server_sessions.project_id = observations.project_id
-        AND server_sessions.team_id = observations.team_id
+      ${SERVER_SESSION_JOIN}
       ORDER BY fused.score DESC, observations.updated_at DESC
       LIMIT $4
     `;
@@ -421,9 +403,13 @@ export class PostgresObservationRepository {
     const run = async (client: PostgresQueryable) => {
       await client.query(`SET LOCAL hnsw.ef_search = ${HYBRID_NEAREST_PARTS}`);
       await client.query(`SET LOCAL hnsw.iterative_scan = strict_order`);
-      return client.query<ObservationRow>(sql, params);
+      return client.query<ObservationRow>(sql, [
+        ...params,
+        toVectorLiteral(queryEmbedding.vector),
+        queryEmbedding.model,
+      ]);
     };
-    const result = isPool(this.client)
+    const result = isPostgresPool(this.client)
       ? await withPostgresTransaction(this.client, run)
       : await run(this.client);
     return result.rows.map(mapObservationRow);

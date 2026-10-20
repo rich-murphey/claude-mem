@@ -2,6 +2,7 @@
 
 import { logger } from '../../utils/logger.js';
 import type { PostgresQueryable } from './utils.js';
+import type { PostgresPool } from './pool.js';
 
 export const SERVER_POSTGRES_SCHEMA_VERSION = 1;
 
@@ -119,11 +120,7 @@ async function applyVectorSchema(client: PostgresQueryable, dims: number): Promi
   await client.query(vectorSchemaSql(dims));
 }
 
-interface PostgresPoolLike extends PostgresQueryable {
-  connect(): Promise<PostgresQueryable & { release(): void }>;
-}
-
-function isPostgresPool(client: PostgresQueryable): client is PostgresPoolLike {
+export function isPostgresPool(client: PostgresQueryable): client is PostgresPool {
   const candidate = client as {
     connect?: unknown;
     release?: unknown;
