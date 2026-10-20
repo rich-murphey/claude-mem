@@ -69,6 +69,99 @@ interface ObservationSourceRow {
   created_at: Date;
 }
 
+// Joins each observation to its session, for content_session_id and the
+// platform filter. SEARCH_SCOPE_SQL needs it in the FROM clause.
+const SERVER_SESSION_JOIN = `
+  LEFT JOIN server_sessions
+    ON server_sessions.id = observations.server_session_id
+    AND server_sessions.project_id = observations.project_id
+    AND server_sessions.team_id = observations.team_id
+`;
+
+// Every filter search() applies besides the text match: summary kind,
+// folder labels, subagent exclusion and platform. Shared by the query and the
+// check that decides whether it widens, so both see the same rows. Expects
+// SERVER_SESSION_JOIN, and parameters $1 project, $2 team, $5 platform,
+// $6 folders, $7 excludeSubagents, $8 summary.
+const SEARCH_SCOPE_SQL = `
+  observations.project_id = $1
+  AND observations.team_id = $2
+  AND ($8::boolean IS NULL OR (observations.kind = 'summary') = $8)
+  AND (
+    $6::text[] IS NULL
+    OR lower((observations.metadata->>'project') COLLATE "C") = ANY(
+      SELECT lower(folder COLLATE "C") FROM unnest($6::text[]) AS folder
+    )
+  )
+  AND (
+    NOT $7::boolean
+    OR NOT EXISTS (
+      SELECT 1
+      FROM observation_sources
+      INNER JOIN agent_events
+        ON agent_events.id = observation_sources.agent_event_id
+        AND agent_events.project_id = observations.project_id
+        AND agent_events.team_id = observations.team_id
+      WHERE observation_sources.observation_id = observations.id
+        AND observation_sources.source_type = 'agent_event'
+        AND COALESCE(agent_events.payload->>'agentId', '') <> ''
+        AND COALESCE(agent_events.payload->>'agentType', '') <> ''
+    )
+  )
+  AND (
+    $5::text IS NULL
+    OR server_sessions.platform_source = $5
+    OR (
+      observations.server_session_id IS NULL
+      AND EXISTS (
+        SELECT 1
+        FROM observation_sources
+        INNER JOIN agent_events
+          ON agent_events.id = observation_sources.agent_event_id
+          AND agent_events.project_id = observations.project_id
+          AND agent_events.team_id = observations.team_id
+        WHERE observation_sources.observation_id = observations.id
+          AND observation_sources.source_type = 'agent_event'
+          AND agent_events.platform_source = $5
+      )
+    )
+  )
+`;
+
+// The text query search() matches, built as the worker's FTS5 search builds
+// its own (SessionSearch.buildFTSMatchQuery and buildFTSAnyTermQuery): every
+// term of the query, widened to any term when that matches nothing in scope
+// and the query has at least MIN_ANY_TERM_TOKENS terms. A question ("when did
+// we change the retry limit") almost never has every word in one observation;
+// one or two terms stay a keyword query (#4130). A CTE yielding one row whose
+// tsq column is the query; expects SEARCH_SCOPE_SQL's parameters, $3 the
+// query, and $9 whether the query may widen.
+const SEARCH_QUERY_SQL = `
+    search_query AS (
+      SELECT CASE
+        WHEN $9::boolean AND NOT EXISTS (
+          SELECT 1
+          FROM observations
+          ${SERVER_SESSION_JOIN}
+          WHERE ${SEARCH_SCOPE_SQL}
+            AND observations.content_search @@ websearch_to_tsquery('english', $3)
+        )
+        THEN (
+          SELECT string_agg(quote_literal(lexeme), ' | ')::tsquery
+          FROM unnest(tsvector_to_array(to_tsvector('english', $3))) AS lexeme
+        )
+        ELSE websearch_to_tsquery('english', $3)
+      END AS tsq
+    )
+`;
+
+const MIN_ANY_TERM_TOKENS = 3;
+
+/** Whether a query may widen to any term, its terms counted as SessionSearch counts them. */
+function mayWidenQuery(query: string | null): boolean {
+  return (query?.match(/\S+/g) ?? []).filter(token => /[\p{L}\p{N}]/u.test(token)).length >= MIN_ANY_TERM_TOKENS;
+}
+
 export class PostgresObservationRepository {
   constructor(private client: PostgresQueryable) {}
 
@@ -242,59 +335,17 @@ export class PostgresObservationRepository {
       : null;
     const result = await this.client.query<ObservationRow>(
       `
+        WITH ${SEARCH_QUERY_SQL}
         SELECT observations.*,
           COALESCE(NULLIF(server_sessions.content_session_id, ''), server_sessions.external_session_id) AS content_session_id
         FROM observations
-        LEFT JOIN server_sessions
-          ON server_sessions.id = observations.server_session_id
-          AND server_sessions.project_id = observations.project_id
-          AND server_sessions.team_id = observations.team_id
-        WHERE observations.project_id = $1
-          AND observations.team_id = $2
-          AND ($8::boolean IS NULL OR (observations.kind = 'summary') = $8)
-          AND ($3::text IS NULL OR observations.content_search @@ websearch_to_tsquery('english', $3))
-          AND (
-            $6::text[] IS NULL
-            OR lower((observations.metadata->>'project') COLLATE "C") = ANY(
-              SELECT lower(folder COLLATE "C") FROM unnest($6::text[]) AS folder
-            )
-          )
-          AND (
-            NOT $7::boolean
-            OR NOT EXISTS (
-              SELECT 1
-              FROM observation_sources
-              INNER JOIN agent_events
-                ON agent_events.id = observation_sources.agent_event_id
-                AND agent_events.project_id = observations.project_id
-                AND agent_events.team_id = observations.team_id
-              WHERE observation_sources.observation_id = observations.id
-                AND observation_sources.source_type = 'agent_event'
-                AND COALESCE(agent_events.payload->>'agentId', '') <> ''
-                AND COALESCE(agent_events.payload->>'agentType', '') <> ''
-            )
-          )
-          AND (
-            $5::text IS NULL
-            OR server_sessions.platform_source = $5
-            OR (
-              observations.server_session_id IS NULL
-              AND EXISTS (
-                SELECT 1
-                FROM observation_sources
-                INNER JOIN agent_events
-                  ON agent_events.id = observation_sources.agent_event_id
-                  AND agent_events.project_id = observations.project_id
-                  AND agent_events.team_id = observations.team_id
-                WHERE observation_sources.observation_id = observations.id
-                  AND observation_sources.source_type = 'agent_event'
-                  AND agent_events.platform_source = $5
-              )
-            )
-          )
+        CROSS JOIN search_query
+        ${SERVER_SESSION_JOIN}
+        WHERE ${SEARCH_SCOPE_SQL}
+          AND ($3::text IS NULL OR observations.content_search @@ search_query.tsq)
         ORDER BY
           CASE WHEN $3::text IS NULL THEN observations.created_at END DESC,
-          ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC,
+          ts_rank(observations.content_search, search_query.tsq) DESC,
           observations.updated_at DESC
         LIMIT $4
       `,
@@ -307,6 +358,7 @@ export class PostgresObservationRepository {
         folderProjects,
         input.excludeSubagents === true,
         input.summary ?? null,
+        mayWidenQuery(query),
       ]
     );
     return result.rows.map(mapObservationRow);

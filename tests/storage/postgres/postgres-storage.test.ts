@@ -271,6 +271,25 @@ describe('server beta postgres observation storage', () => {
     await expect(storage.observations.timelineAround({ ...scope, anchorId: created[1].id, depthBefore: 21 })).rejects.toThrow('depth');
   });
 
+  it('widens a question whose terms never all appear in one observation, as the worker does', async () => {
+    const team = await storage.teams.create({ name: 'team' });
+    const project = await storage.projects.create({ teamId: team.id, name: 'project' });
+    const retry = await storage.observations.create({
+      projectId: project.id, teamId: team.id, content: 'Raised the retry limit to five for the gateway client.',
+    });
+    await storage.observations.create({ projectId: project.id, teamId: team.id, content: 'Lunch is at noon.' });
+    const search = async (query: string) =>
+      (await storage.observations.search({ projectId: project.id, teamId: team.id, query })).map(o => o.id);
+
+    // No observation has every term ("change" never appears); three or more
+    // terms widen to any term, ranked by how many match.
+    expect(await search('when did we change the retry limit')).toEqual([retry.id]);
+    // One or two terms stay a keyword query (#4130).
+    expect(await search('retry lunch')).toEqual([]);
+    // Terms that all appear in a row keep requiring every term.
+    expect(await search('retry limit gateway')).toEqual([retry.id]);
+  });
+
   it('scopes observation generation_key idempotency to project and team', async () => {
     const firstScope = await createFixtureScope(storage);
     const secondScope = await createFixtureScope(storage);
