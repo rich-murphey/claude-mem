@@ -42,7 +42,14 @@ export class LocalEmbedder implements Embedder {
   private extractor: { tokenizer: any; model: any } | null = null;
   private loading: Promise<{ tokenizer: any; model: any }> | null = null;
 
-  constructor(private readonly model: EmbeddingModel = DEFAULT_EMBEDDING_MODEL) {
+  /**
+   * `threads` caps onnxruntime's intra-op threads; unset, it takes every CPU
+   * thread. Fixed when the model loads.
+   */
+  constructor(
+    private readonly model: EmbeddingModel = DEFAULT_EMBEDDING_MODEL,
+    readonly threads?: number,
+  ) {
     // The token limit is part of the identity: the same model truncated
     // elsewhere produces different vectors for long texts.
     this.modelId = `${model.repo}/${model.dtype}/${model.pooling}/l2/${model.maxTokens}`;
@@ -61,7 +68,10 @@ export class LocalEmbedder implements Embedder {
         const { AutoModel, AutoTokenizer } = await import('@huggingface/transformers');
         this.extractor = {
           tokenizer: await AutoTokenizer.from_pretrained(this.model.repo),
-          model: await AutoModel.from_pretrained(this.model.repo, { dtype: this.model.dtype }),
+          model: await AutoModel.from_pretrained(this.model.repo, {
+            dtype: this.model.dtype,
+            ...(this.threads ? { session_options: { intraOpNumThreads: this.threads } } : {}),
+          }),
         };
         return this.extractor;
       })();

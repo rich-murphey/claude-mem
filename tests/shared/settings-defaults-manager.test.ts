@@ -1326,4 +1326,8 @@ describe('embedding model default', () => {
   it('decides the server\'s search by meaning by whether the database is new', () => {
     expect(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_SERVER_VECTOR_SEARCH).toBe('auto');
   });
+
+  it('caps a backfill at half the CPU threads unless set', () => {
+    expect(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_EMBEDDING_BACKFILL_THREADS).toBe('');
+  });
 });
