@@ -292,6 +292,7 @@ export interface SettingsDefaults {
   CLAUDE_MEM_CHROMA_MUTATION_TIMEOUT_MS: string;
   CLAUDE_MEM_CHROMA_MAX_PENDING_MUTATIONS: string;
   CLAUDE_MEM_CHROMA_EMBEDDING_FUNCTION: string;  // chroma-mcp embedding function for new collections
+  CLAUDE_MEM_SERVER_VECTOR_SEARCH: string;       // server search by meaning: 'auto', 'true' or 'false'
   CLAUDE_MEM_EMBEDDING_MODEL: string;            // in-process embedding model for server search by meaning
   CLAUDE_MEM_CHROMA_UVX_PATH: string;            // uvx binary (or its folder) to launch chroma-mcp with
   CLAUDE_MEM_SEARCH_RECENCY_DAYS: string;        // Implicit 90-day recency window on date-less semantic searches (#4770); 0 = no window
@@ -561,6 +562,12 @@ export class SettingsDefaultsManager {
     // memory text to that vendor. Any other value is rejected. Applies to new
     // collections only — changing it requires re-indexing.
     CLAUDE_MEM_CHROMA_EMBEDDING_FUNCTION: 'default',
+    // The server's search by meaning (pgvector): it embeds every observation
+    // in process, existing rows in the background at worker start. 'true'
+    // turns it on and 'false' off. 'auto' turns it on for a new database and
+    // leaves a database from before it keyword-only, so an upgrade adds no
+    // embedding work until that deployment sets 'true'.
+    CLAUDE_MEM_SERVER_VECTOR_SEARCH: 'auto',
     // Embedding model the server's search by meaning uses: a key of
     // EMBEDDING_MODELS in src/services/vector/models.ts, which lists them and
     // their vector widths. 'all-MiniLM-L6-v2' is Chroma's default
