@@ -12,6 +12,7 @@ import {
   toJsonObject
 } from './utils.js';
 import { normalizePlatformSourceOrNull } from '../../shared/platform-source.js';
+import { BM25_INDEX_NAME, usesBm25Index } from './schema.js';
 
 export type ObservationSourceType = 'agent_event' | 'session_summary' | 'observation_reindex' | 'manual';
 
@@ -128,6 +129,13 @@ const SEARCH_SCOPE_SQL = `
   )
 `;
 
+// Every term of $3 ORed: the english tsvector's lexemes of the query, so stop
+// words drop out as they do from content_search.
+const ANY_TERM_TSQUERY_SQL = `
+  SELECT string_agg(quote_literal(lexeme), ' | ')::tsquery
+  FROM unnest(tsvector_to_array(to_tsvector('english', $3))) AS lexeme
+`;
+
 // The text query search() matches, built as the worker's FTS5 search builds
 // its own (SessionSearch.buildFTSMatchQuery and buildFTSAnyTermQuery): every
 // term of the query, widened to any term when that matches nothing in scope
@@ -146,10 +154,7 @@ const SEARCH_QUERY_SQL = `
           WHERE ${SEARCH_SCOPE_SQL}
             AND observations.content_search @@ websearch_to_tsquery('english', $3)
         )
-        THEN (
-          SELECT string_agg(quote_literal(lexeme), ' | ')::tsquery
-          FROM unnest(tsvector_to_array(to_tsvector('english', $3))) AS lexeme
-        )
+        THEN (${ANY_TERM_TSQUERY_SQL})
         ELSE websearch_to_tsquery('english', $3)
       END AS tsq
     )
@@ -333,6 +338,41 @@ export class PostgresObservationRepository {
     const folderProjects = input.folderProjects && input.folderProjects.length > 0
       ? input.folderProjects
       : null;
+    if (query !== null && usesBm25Index(this.client)) {
+      // bm25 weighs each term by how rare it is, so a row holding any term
+      // can be ranked against one holding every common word of a question:
+      // any term matches and the ranking decides, with no every-term step.
+      // Ordered by the bm25 index scan, which scores rows as it yields them;
+      // naming the score anywhere else in the query scores each row again
+      // outside the index, at a cost of milliseconds a row. The scan also
+      // yields rows with no query term (score 0) once the matches run out;
+      // a tsvector match, which costs microseconds, marks those for dropping.
+      const result = await this.client.query<ObservationRow & { matches_query: boolean }>(
+        `
+          WITH search_query AS (SELECT (${ANY_TERM_TSQUERY_SQL}) AS tsq)
+          SELECT observations.*,
+            COALESCE(NULLIF(server_sessions.content_session_id, ''), server_sessions.external_session_id) AS content_session_id,
+            observations.content_search @@ search_query.tsq AS matches_query
+          FROM observations
+          CROSS JOIN search_query
+          ${SERVER_SESSION_JOIN}
+          WHERE ${SEARCH_SCOPE_SQL}
+          ORDER BY observations.content <@> to_bm25query($3, '${BM25_INDEX_NAME}'), observations.id
+          LIMIT $4
+        `,
+        [
+          input.projectId,
+          input.teamId,
+          query,
+          input.limit ?? 20,
+          platformSource,
+          folderProjects,
+          input.excludeSubagents === true,
+          input.summary ?? null,
+        ]
+      );
+      return result.rows.filter(row => row.matches_query).map(mapObservationRow);
+    }
     const result = await this.client.query<ObservationRow>(
       `
         WITH ${SEARCH_QUERY_SQL}

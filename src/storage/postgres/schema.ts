@@ -29,16 +29,23 @@ export async function bootstrapServerPostgresSchema(client: PostgresQueryable): 
   if (isPostgresPool(client)) {
     const poolClient = await client.connect();
     try {
-      await bootstrapServerPostgresSchema(poolClient);
+      await applySchema(poolClient, client);
     } finally {
       poolClient.release();
     }
-    return;
+  } else {
+    await applySchema(client, client);
   }
+}
 
+// One connection for the whole bootstrap: BEGIN and COMMIT sent through a
+// pool could each land on a different connection.
+async function applySchema(client: PostgresQueryable, owner: PostgresQueryable): Promise<void> {
   await client.query('BEGIN');
   try {
     await applyPhase1Migration(client);
+    await applyBm25Index(client);
+    await detectBm25Index(client, owner);
     await client.query('COMMIT');
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
@@ -58,6 +65,100 @@ async function applyPhase1Migration(client: PostgresQueryable): Promise<void> {
     `,
     [SERVER_POSTGRES_SCHEMA_VERSION, 'phase 1 postgres observation storage foundation']
   );
+}
+
+export const BM25_INDEX_NAME = 'idx_observations_content_bm25';
+
+// Keyword search ranks by bm25 when the pg_textsearch extension provides a
+// bm25 index over observation content, and by ts_rank otherwise. Stock
+// postgres images do not ship it, and it needs shared_preload_libraries, so
+// where it is not installable no index is created and search keeps ts_rank.
+// The index is not a numbered migration: whether it can exist depends on the
+// extension, so every bootstrap reconciles it.
+async function applyBm25Index(client: PostgresQueryable): Promise<void> {
+  const available = await client.query(
+    `SELECT 1 FROM pg_available_extensions WHERE name = 'pg_textsearch'`
+  );
+  if (available.rows.length === 0) return;
+  // pg_textsearch is not a trusted extension, and it refuses to be created
+  // unless preloaded: either way the role boots with ts_rank ranking.
+  const installed = await client.query(`SELECT 1 FROM pg_extension WHERE extname = 'pg_textsearch'`);
+  if (installed.rows.length === 0) {
+    await client.query('SAVEPOINT create_pg_textsearch');
+    try {
+      await client.query('CREATE EXTENSION IF NOT EXISTS pg_textsearch');
+      await client.query('RELEASE SAVEPOINT create_pg_textsearch');
+    } catch (error) {
+      await client.query('ROLLBACK TO SAVEPOINT create_pg_textsearch');
+      logger.warn('SYSTEM', 'pg_textsearch could not be created; keyword search ranks by ts_rank', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+  }
+  if (!(await isBm25Loaded(client))) {
+    logger.warn('SYSTEM', 'pg_textsearch is installed but not in shared_preload_libraries; keyword search ranks by ts_rank');
+    return;
+  }
+  // Installed earlier into a schema outside this connection's search_path,
+  // its access method still works but its operator cannot be named here.
+  const visible = await client.query<{ visible: boolean }>(
+    `SELECT to_regtype('bm25query') IS NOT NULL AS visible`
+  );
+  if (visible.rows[0]?.visible !== true) {
+    logger.warn('SYSTEM', 'pg_textsearch is installed in a schema outside the search_path; keyword search ranks by ts_rank');
+    return;
+  }
+  // Tokenized as content_search is, so a row the bm25 index scores is a row
+  // the english tsvector matches.
+  await client.query(
+    `CREATE INDEX IF NOT EXISTS ${BM25_INDEX_NAME} ON observations USING bm25 (content) WITH (text_config = 'english')`
+  );
+}
+
+const BM25_LOADED_SQL =
+  `'pg_textsearch' = ANY(string_to_array(replace(current_setting('shared_preload_libraries'), ' ', ''), ','))`;
+
+async function isBm25Loaded(client: PostgresQueryable): Promise<boolean> {
+  const result = await client.query<{ loaded: boolean }>(`SELECT ${BM25_LOADED_SQL} AS loaded`);
+  return result.rows[0]?.loaded === true;
+}
+
+// Whether search() ranks by bm25, per pool or client, decided at startup by
+// detectBm25Index so a search runs no extra query to find out.
+const bm25IndexInUse = new WeakMap<PostgresQueryable, boolean>();
+
+/**
+ * Decides, once, whether keyword search through this pool or client ranks by
+ * bm25: the index exists in its search_path, its library is loaded, and it is
+ * the only bm25 index on observations (a query naming one index fails if the
+ * planner scans another). Bootstrap calls it; a server started without
+ * bootstrap calls it directly. Queried through `client`, recorded for `owner`
+ * (a pool, when `client` is one of its connections).
+ */
+export async function detectBm25Index(client: PostgresQueryable, owner: PostgresQueryable = client): Promise<boolean> {
+  const result = await client.query<{ present: boolean; others: number }>(
+    `SELECT to_regclass($1) IS NOT NULL AND ${BM25_LOADED_SQL} AS present,
+       (SELECT count(*)::int FROM pg_index i
+          JOIN pg_class c ON c.oid = i.indexrelid
+          JOIN pg_am a ON a.oid = c.relam
+        WHERE a.amname = 'bm25' AND i.indrelid = to_regclass('observations')
+          AND i.indexrelid IS DISTINCT FROM to_regclass($1)) AS others`,
+    [BM25_INDEX_NAME]
+  );
+  const row = result.rows[0];
+  if (row?.present === true && row.others > 0) {
+    logger.warn('SYSTEM', 'observations has another bm25 index besides the one claude-mem creates; keyword search ranks by ts_rank');
+  }
+  const inUse = row?.present === true && row.others === 0;
+  bm25IndexInUse.set(owner, inUse);
+  logger.info('SYSTEM', `keyword search ranks by ${inUse ? 'bm25 (pg_textsearch)' : 'ts_rank'}`);
+  return inUse;
+}
+
+/** What detectBm25Index decided for this pool or client; ts_rank if it never ran. */
+export function usesBm25Index(client: PostgresQueryable): boolean {
+  return bm25IndexInUse.get(client) === true;
 }
 
 interface PostgresPoolLike extends PostgresQueryable {

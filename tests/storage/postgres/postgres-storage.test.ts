@@ -5,6 +5,7 @@ import {
   bootstrapServerPostgresSchema,
   buildObservationGenerationKey,
   createPostgresStorageRepositories,
+  usesBm25Index,
   type PostgresPoolClient,
   type PostgresStorageRepositories
 } from '../../../src/storage/postgres/index.js';
@@ -288,6 +289,38 @@ describe('server beta postgres observation storage', () => {
     expect(await search('retry lunch')).toEqual([]);
     // Terms that all appear in a row keep requiring every term.
     expect(await search('retry limit gateway')).toEqual([retry.id]);
+  });
+
+  it('ranks by bm25 over any term when pg_textsearch provides a bm25 index', async () => {
+    // pg_textsearch installs into public; this suite's search_path leaves it
+    // out, so this test adds it and bootstraps again to create the index.
+    await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}, public`);
+    await bootstrapServerPostgresSchema(client);
+    if (!usesBm25Index(client)) {
+      console.warn('pg_textsearch is not installed and preloaded here; bm25 ranking not tested');
+      return;
+    }
+    const team = await storage.teams.create({ name: 'team' });
+    const project = await storage.projects.create({ teamId: team.id, name: 'project' });
+    const create = (content: string) =>
+      storage.observations.create({ projectId: project.id, teamId: team.id, content });
+    const retry = await create('Raised the retry limit to five for the gateway client.');
+    const changes = [
+      await create('Change of plans: change the changelog format again.'),
+      await create('Change the header font.'),
+      await create('Change the footer colour.'),
+    ];
+    await create('Lunch is at noon.');
+    const search = async (query: string) =>
+      (await storage.observations.search({ projectId: project.id, teamId: team.id, query })).map(o => o.id);
+
+    // "change" is in three observations and "retry" and "limit" in one, so
+    // the rare terms rank first; rows with no term are left out.
+    const results = await search('when did we change the retry limit');
+    expect(results[0]).toBe(retry.id);
+    expect(new Set(results)).toEqual(new Set([retry.id, ...changes.map(o => o.id)]));
+    // Any term matches however few terms there are.
+    expect(await search('retry pizza')).toEqual([retry.id]);
   });
 
   it('scopes observation generation_key idempotency to project and team', async () => {

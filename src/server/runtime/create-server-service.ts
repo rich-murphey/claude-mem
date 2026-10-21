@@ -7,7 +7,7 @@ import { pathToFileURL } from 'url';
 import { logger } from '../../utils/logger.js';
 import { ModeManager } from '../../services/domain/ModeManager.js';
 import { getSharedPostgresPool, SERVER_POSTGRES_SCHEMA_VERSION } from '../../storage/postgres/index.js';
-import { bootstrapServerPostgresSchema } from '../../storage/postgres/schema.js';
+import { bootstrapServerPostgresSchema, detectBm25Index } from '../../storage/postgres/schema.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 import { getRedisQueueConfig } from '../queue/redis-config.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
@@ -439,6 +439,7 @@ function buildQueueManager(): ServerQueueManager {
 
 async function initializePostgres(pool: PostgresPool, bootstrapSchema: boolean): Promise<ServerBootstrapStatus> {
   if (!bootstrapSchema) {
+    await detectBm25Index(pool);
     return { initialized: false, schemaVersion: null, appliedAt: null };
   }
 
