@@ -83,7 +83,9 @@ export async function fetchServerContextRows(
       folderProjects,
       excludeSubagents: config.mainAgentOnly,
       ...(platformSource ? { platformSource } : {}),
-      ...(contentSessionId ? { contentSessionId } : {}),
+      // With the session: how many observations the block shows in full, the
+      // only ones the server records as injected.
+      ...(contentSessionId ? { contentSessionId, fullObservationCount: config.fullObservationCount ?? 0 } : {}),
     }, timeoutMs === undefined ? {} : { timeoutMs });
     rows = Array.isArray(result?.observations) ? result.observations : [];
   } catch (error) {

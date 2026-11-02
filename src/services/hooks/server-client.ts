@@ -199,6 +199,10 @@ export interface ServerContextObservationsRequest {
   // /v1/context/semantic, so the server can record what it put there and
   // not inject it again per prompt. Servers that ignore it see no change.
   contentSessionId?: string | null;
+  // How many of the returned observations the block renders in full
+  // (CLAUDE_MEM_CONTEXT_FULL_COUNT), newest first; the rest are title-only.
+  // Sent with contentSessionId so the server records only those as injected.
+  fullObservationCount?: number;
 }
 
 export interface ServerContextObservationsResponse {
@@ -345,6 +349,7 @@ export class ServerClient {
     }
     if (input.excludeSubagents !== undefined) payload.excludeSubagents = input.excludeSubagents;
     if (input.contentSessionId) payload.contentSessionId = input.contentSessionId;
+    if (input.fullObservationCount !== undefined) payload.fullObservationCount = input.fullObservationCount;
     return this.request<ServerContextObservationsResponse>('POST', '/v1/context', payload, options);
   }
 

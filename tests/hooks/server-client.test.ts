@@ -304,10 +304,12 @@ describe('ServerClient', () => {
   it('contextObservations sends contentSessionId only when set', async () => {
     installFetch(async () => new Response(JSON.stringify({ observations: [], context: '' }), { status: 200 }));
     const client = new ServerClient({ serverBaseUrl: 'http://localhost:9999', apiKey: 'cmem_test' });
-    await client.contextObservations({ projectId: 'p1', contentSessionId: 'cs-1' });
+    await client.contextObservations({ projectId: 'p1', contentSessionId: 'cs-1', fullObservationCount: 2 });
     await client.contextObservations({ projectId: 'p1' });
     expect((captured[0]?.body as Record<string, unknown>).contentSessionId).toBe('cs-1');
+    expect((captured[0]?.body as Record<string, unknown>).fullObservationCount).toBe(2);
     expect(Object.prototype.hasOwnProperty.call(captured[1]?.body, 'contentSessionId')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(captured[1]?.body, 'fullObservationCount')).toBe(false);
   });
 
   it('getJobStatus sends GET /v1/jobs/:id', async () => {
