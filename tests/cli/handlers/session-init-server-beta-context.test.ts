@@ -196,7 +196,7 @@ describe('sessionInitHandler server semantic injection', () => {
   });
   // The script above as a template: the semantic stub, the budget and the
   // checks change; the prompt must still continue without the worker.
-  function runScenario(semanticContext: string, timeoutMs: number, checks: string): void {
+  function runScenario(semanticContext: string, timeoutMs: number, checks: string, prompt = 'Please restore platform-aware context for this Cursor session.'): void {
     const env = { ...process.env };
     delete env.CLAUDE_MEM_INTERNAL;
     const script = `
@@ -233,7 +233,7 @@ describe('sessionInitHandler server semantic injection', () => {
         sessionId: 'session-server-context',
         cwd: '/tmp/session-init-server-context-test',
         platform: 'Cursor CLI',
-        prompt: 'Please restore platform-aware context for this Cursor session.',
+        prompt: ${JSON.stringify(prompt)},
       });
       if (workerFallbackCalled) throw new Error('worker fallback was called');
       if (!result.continue) throw new Error('prompt did not continue: ' + JSON.stringify(result));
@@ -255,6 +255,18 @@ describe('sessionInitHandler server semantic injection', () => {
     runScenario(`return { context: '', count: 0 };`, SESSION_INIT_TIMEOUT_MS, `
       if (calls.semanticContext !== 1) throw new Error('semanticContext count ' + calls.semanticContext);
     `);
+  });
+
+  it('asks the server for a prompt of 8 characters or more', () => {
+    runScenario(`return { context: '', count: 0 };`, SESSION_INIT_TIMEOUT_MS, `
+      if (calls.semanticContext !== 1) throw new Error('semanticContext count ' + calls.semanticContext);
+    `, 'explain RRF');
+  });
+
+  it('skips the semantic call for a prompt under 8 characters', () => {
+    runScenario(`return { context: 'x', count: 1 };`, SESSION_INIT_TIMEOUT_MS, `
+      if (calls.semanticContext !== 0) throw new Error('semanticContext was called for a 3-character prompt');
+    `, 'yes');
   });
 
   it('skips the semantic call when the prompt\'s time budget is spent', () => {
