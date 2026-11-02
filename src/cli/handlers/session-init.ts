@@ -235,7 +235,7 @@ const sessionInit = {
     // value. Legacy `'server-beta'` is normalized inside `selectRuntime()`.
     if (runtime.runtime === 'server') {
       try {
-        await startServerSession(
+        const serverSessionId = await startServerSession(
           runtime,
           input,
           sessionId,
@@ -247,16 +247,29 @@ const sessionInit = {
             Math.floor(sessionInitTimeoutMs / SESSION_INIT_SERVER_TIMEOUT_DIVISOR),
           ),
         );
+        // The prompt is an event too, so the session's summary sees what was
+        // asked as well as what was done; recorded beside the semantic call.
+        const recorded = recordServerPrompt(
+          runtime,
+          serverSessionId,
+          sessionId,
+          platformSource,
+          prompt,
+          remainingSessionInitTimeoutMs(sessionInitStartedAt, sessionInitTimeoutMs),
+        );
         if (semanticInject && prompt.length >= SEMANTIC_CONTEXT_HOOK_MIN_QUERY_CHARS && prompt !== '[media prompt]') {
-          const additionalContext = await fetchServerSemanticContext(
-            runtime,
-            sessionId,
-            prompt,
-            settings.CLAUDE_MEM_SEMANTIC_INJECT_LIMIT,
-            platformSource,
-            projectContext.allProjects,
-            remainingSessionInitTimeoutMs(sessionInitStartedAt, sessionInitTimeoutMs),
-          );
+          const [additionalContext] = await Promise.all([
+            fetchServerSemanticContext(
+              runtime,
+              sessionId,
+              prompt,
+              settings.CLAUDE_MEM_SEMANTIC_INJECT_LIMIT,
+              platformSource,
+              projectContext.allProjects,
+              remainingSessionInitTimeoutMs(sessionInitStartedAt, sessionInitTimeoutMs),
+            ),
+            recorded,
+          ]);
           if (additionalContext) {
             return {
               continue: true,
@@ -264,6 +277,8 @@ const sessionInit = {
               hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext },
             };
           }
+        } else {
+          await recorded;
         }
         return { continue: true, suppressOutput: true };
       } catch (error: unknown) {
@@ -407,8 +422,8 @@ async function startServerSession(
   project: string,
   prompt: string,
   timeoutMs: number,
-): Promise<void> {
-  await runtime.client.startSession({
+): Promise<string | undefined> {
+  const started = await runtime.client.startSession({
     projectId: runtime.projectId,
     externalSessionId: sessionId,
     contentSessionId: sessionId,
@@ -421,6 +436,41 @@ async function startServerSession(
     contentSessionId: sessionId,
     project,
   });
+  return started?.session?.id;
+}
+
+/**
+ * Record the prompt as a `user_prompt` event with no generation job. The
+ * client strips <private> and the other memory tags from the payload, as it
+ * does for the prompt in the session's metadata. Never throws: a prompt is
+ * never held up or failed by its record.
+ */
+async function recordServerPrompt(
+  runtime: ServerRuntimeContext,
+  serverSessionId: string | undefined,
+  sessionId: string,
+  platformSource: string,
+  prompt: string,
+  timeoutMs: number,
+): Promise<void> {
+  if (prompt === '[media prompt]' || timeoutMs < SESSION_INIT_MIN_REMAINING_TIMEOUT_MS) return;
+  try {
+    await runtime.client.recordEvent({
+      projectId: runtime.projectId,
+      ...(serverSessionId ? { serverSessionId } : {}),
+      contentSessionId: sessionId,
+      platformSource,
+      sourceType: 'hook',
+      eventType: 'user_prompt',
+      occurredAtEpoch: Date.now(),
+      payload: { prompt },
+      generate: false,
+    }, { timeoutMs });
+  } catch (error: unknown) {
+    logger.warn('HOOK', 'session-init: recording the prompt failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**

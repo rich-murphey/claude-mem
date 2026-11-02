@@ -118,7 +118,7 @@ describe('sessionInitHandler server semantic injection', () => {
     delete env.CLAUDE_MEM_INTERNAL;
     const prompt = 'Please restore platform-aware context for this Cursor session.';
     const script = `
-      const serverCalls = { startSession: [], contextObservations: [], semanticContext: [] };
+      const serverCalls = { startSession: [], contextObservations: [], semanticContext: [], recordEvent: [] };
       let workerFallbackCalled = false;
       const { sessionInitHandler, setSessionInitDependenciesForTesting } = await import('./src/cli/handlers/session-init.ts');
       setSessionInitDependenciesForTesting({
@@ -144,6 +144,10 @@ describe('sessionInitHandler server semantic injection', () => {
             semanticContext: async (input, options) => {
               serverCalls.semanticContext.push({ input, options });
               return { context: 'server semantic context', count: 1 };
+            },
+            recordEvent: async (input, options) => {
+              serverCalls.recordEvent.push({ input, options });
+              return { event: { id: 'event-1' } };
             },
           },
         }),
@@ -176,6 +180,11 @@ describe('sessionInitHandler server semantic injection', () => {
       if (semantic.input.projectId !== 'server-project-1' || semantic.input.query !== ${JSON.stringify(prompt)} || semantic.input.limit !== 7 || semantic.input.platformSource !== 'cursor' || semantic.input.contentSessionId !== 'session-server-context' || !(semantic.options.timeoutMs > 0)) {
         throw new Error('semanticContext body mismatch: ' + JSON.stringify(semantic));
       }
+      if (serverCalls.recordEvent.length !== 1) throw new Error('recordEvent count mismatch: ' + serverCalls.recordEvent.length);
+      const recorded = serverCalls.recordEvent[0];
+      if (recorded.input.eventType !== 'user_prompt' || recorded.input.generate !== false || recorded.input.serverSessionId !== 'server-session-1' || recorded.input.contentSessionId !== 'session-server-context' || recorded.input.payload?.prompt !== ${JSON.stringify(prompt)} || !(recorded.options.timeoutMs > 0)) {
+        throw new Error('recordEvent body mismatch: ' + JSON.stringify(recorded));
+      }
       if (!result.continue || !result.suppressOutput) throw new Error('unexpected result ' + JSON.stringify(result));
       if (result.hookSpecificOutput?.hookEventName !== 'UserPromptSubmit' || result.hookSpecificOutput?.additionalContext !== 'server semantic context') {
         throw new Error('semantic context not injected: ' + JSON.stringify(result));
@@ -196,11 +205,11 @@ describe('sessionInitHandler server semantic injection', () => {
   });
   // The script above as a template: the semantic stub, the budget and the
   // checks change; the prompt must still continue without the worker.
-  function runScenario(semanticContext: string, timeoutMs: number, checks: string, prompt = 'Please restore platform-aware context for this Cursor session.'): void {
+  function runScenario(semanticContext: string, timeoutMs: number, checks: string, prompt = 'Please restore platform-aware context for this Cursor session.', recordEvent = `calls.recordEvent.push(input); return { event: { id: 'event-1' } };`): void {
     const env = { ...process.env };
     delete env.CLAUDE_MEM_INTERNAL;
     const script = `
-      const calls = { semanticContext: 0 };
+      const calls = { semanticContext: 0, recordEvent: [] };
       let workerFallbackCalled = false;
       const { sessionInitHandler, setSessionInitDependenciesForTesting } = await import('./src/cli/handlers/session-init.ts');
       setSessionInitDependenciesForTesting({
@@ -218,6 +227,7 @@ describe('sessionInitHandler server semantic injection', () => {
             startSession: async () => ({ session: { id: 'server-session-1' } }),
             contextObservations: async () => ({ observations: [], context: '' }),
             semanticContext: async () => { calls.semanticContext++; ${semanticContext} },
+            recordEvent: async (input) => { ${recordEvent} },
           },
         }),
         getSessionInitRequestTimeoutMs: () => ${timeoutMs},
@@ -263,10 +273,23 @@ describe('sessionInitHandler server semantic injection', () => {
     `, 'explain RRF');
   });
 
-  it('skips the semantic call for a prompt under 8 characters', () => {
+  it('skips the semantic call for a prompt under 8 characters, but records the prompt', () => {
     runScenario(`return { context: 'x', count: 1 };`, SESSION_INIT_TIMEOUT_MS, `
       if (calls.semanticContext !== 0) throw new Error('semanticContext was called for a 3-character prompt');
+      if (calls.recordEvent.length !== 1 || calls.recordEvent[0].eventType !== 'user_prompt' || calls.recordEvent[0].payload.prompt !== 'yes') throw new Error('prompt not recorded: ' + JSON.stringify(calls.recordEvent));
     `, 'yes');
+  });
+
+  it('lets the prompt continue when recording it fails', () => {
+    runScenario(`return { context: '', count: 0 };`, SESSION_INIT_TIMEOUT_MS, `
+      if (calls.semanticContext !== 1) throw new Error('semanticContext count ' + calls.semanticContext);
+    `, 'Please record this prompt even if the server refuses it.', `throw new Error('server refused the event');`);
+  });
+
+  it('does not record an image-only prompt', () => {
+    runScenario(`return { context: '', count: 0 };`, SESSION_INIT_TIMEOUT_MS, `
+      if (calls.recordEvent.length !== 0) throw new Error('media placeholder recorded: ' + JSON.stringify(calls.recordEvent));
+    `, '');
   });
 
   it('skips the semantic call when the prompt\'s time budget is spent', () => {
