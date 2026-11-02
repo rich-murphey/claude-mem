@@ -12,6 +12,9 @@ import { resolveRuntimeContext } from '../../services/hooks/runtime-selector.js'
 
 // Claude Code gives plugin SessionEnd hooks a 1.5-second budget, so this hook
 // only spools the request and pokes the worker; it never waits on the worker.
+// In server runtime it makes one request, named by the agent's own session id
+// so no /v1/sessions/start is needed, bounded well inside that budget.
+const SERVER_SESSION_END_TIMEOUT_MS = 1_000;
 
 export const sessionEndHandler: EventHandler = {
   async execute(input: NormalizedHookInput): Promise<HookResult> {
@@ -31,9 +34,21 @@ export const sessionEndHandler: EventHandler = {
     const platformSource = normalizePlatformSource(input.platform);
     const runtime = resolveRuntimeContext();
     if (runtime.runtime === 'server') {
-      logger.debug('HOOK', 'session-end: Server runtime handling is not implemented, skipping', {
-        sessionId,
-      });
+      // The session's real end: the server summarises what no compaction
+      // covered and ends it. A turn's Stop no longer ends it (summarize.ts).
+      try {
+        await runtime.client.endSession(
+          { sessionId, projectId: runtime.projectId, reason: input.reason || 'other' },
+          { timeoutMs: SERVER_SESSION_END_TIMEOUT_MS },
+        );
+        logger.debug('HOOK', 'session-end: Session ended via server', { sessionId, reason: input.reason });
+      } catch (error: unknown) {
+        // The server's idle sweep ends a session whose SessionEnd never arrived.
+        logger.warn('HOOK', 'session-end: Server end failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return { continue: true, suppressOutput: true, exitCode: HOOK_EXIT_CODES.SUCCESS };
     }
 

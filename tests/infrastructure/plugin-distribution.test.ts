@@ -373,6 +373,7 @@ describe('Plugin Distribution - hooks.json Integrity', () => {
       Stop: [['hook', 'claude-code', 'summarize']],
       SubagentStop: [['hook', 'claude-code', 'subagent-stop']],
       SessionEnd: [['hook', 'claude-code', 'session-end']],
+      PreCompact: [['hook', 'claude-code', 'pre-compact']],
     });
   });
 
@@ -734,6 +735,7 @@ const CLAUDE_EXEC_EXPECTATIONS: Record<string, Record<string, unknown>> = {
   // Records that a subagent finished, so My Work stops showing it as working.
   'SubagentStop.0.0': claudeExecHook(['hook', 'claude-code', 'subagent-stop'], { timeout: 30, async: true }),
   'SessionEnd.0.0': claudeExecHook(['hook', 'claude-code', 'session-end'], { async: true }),
+  'PreCompact.0.0': claudeExecHook(['hook', 'claude-code', 'pre-compact'], { timeout: 15, async: true }),
 };
 
 const RULE_A_EXPECTATIONS: Record<string, Record<string, RuleAExpectation>> = {

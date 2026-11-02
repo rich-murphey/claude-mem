@@ -117,6 +117,22 @@ export interface ServerRecordEventResponse {
 
 export interface ServerEndSessionRequest {
   sessionId: string;
+  // A real end (the SessionEnd hook): Claude Code's reason (clear, logout,
+  // prompt_input_exit, other). Without it the call is the legacy end the
+  // server treats as one per session.
+  reason?: string;
+  // With a reason: the project in which sessionId may be the agent's own
+  // session id rather than the server_sessions row id, so the hook needs
+  // no /v1/sessions/start first.
+  projectId?: string;
+}
+
+export interface ServerCheckpointSessionRequest {
+  // The server_sessions row id, or the agent's own id with projectId.
+  sessionId: string;
+  projectId?: string;
+  reason: string;
+  trigger?: string;
 }
 
 export interface ServerEndSessionResponse {
@@ -281,14 +297,43 @@ export class ServerClient {
     return this.request<ServerRecordEventResponse>('POST', path, body, options);
   }
 
-  async endSession(input: ServerEndSessionRequest): Promise<ServerEndSessionResponse> {
+  async endSession(
+    input: ServerEndSessionRequest,
+    options: ServerRequestOptions = {},
+  ): Promise<ServerEndSessionResponse> {
     if (!input.sessionId) {
       throw new ServerClientError('invalid_response', 'sessionId is required for endSession');
+    }
+    const body: Record<string, unknown> = {};
+    if (input.reason) {
+      body.reason = input.reason;
+      if (input.projectId) body.projectId = input.projectId;
     }
     return this.request<ServerEndSessionResponse>(
       'POST',
       `/v1/sessions/${encodeURIComponent(input.sessionId)}/end`,
-      {},
+      body,
+      options,
+    );
+  }
+
+  // A compaction: the server summarises the session's events since its last
+  // summary and keeps the session open.
+  async checkpointSession(
+    input: ServerCheckpointSessionRequest,
+    options: ServerRequestOptions = {},
+  ): Promise<ServerEndSessionResponse> {
+    if (!input.sessionId) {
+      throw new ServerClientError('invalid_response', 'sessionId is required for checkpointSession');
+    }
+    const body: Record<string, unknown> = { reason: input.reason };
+    if (input.trigger) body.trigger = input.trigger;
+    if (input.projectId) body.projectId = input.projectId;
+    return this.request<ServerEndSessionResponse>(
+      'POST',
+      `/v1/sessions/${encodeURIComponent(input.sessionId)}/checkpoint`,
+      body,
+      options,
     );
   }
 

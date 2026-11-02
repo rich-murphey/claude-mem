@@ -224,6 +224,9 @@ export function shellTemplateManifest(buildShellCommand, buildCodexWindowsComman
         // Records that a subagent finished, so My Work stops showing it as working.
         'SubagentStop.0.0': claudeExecHook(['hook', 'claude-code', 'subagent-stop'], { timeout: 30, async: true }),
         'SessionEnd.0.0': claudeExecHook(['hook', 'claude-code', 'session-end'], { async: true }),
+        // Server runtime: a compaction asks the server to summarise the
+        // events since the last one. Async: it must never hold up compaction.
+        'PreCompact.0.0': claudeExecHook(['hook', 'claude-code', 'pre-compact'], { timeout: 15, async: true }),
       },
     },
     'plugin/hooks/codex-hooks.json': {

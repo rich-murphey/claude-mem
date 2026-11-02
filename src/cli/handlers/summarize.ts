@@ -81,8 +81,8 @@ async function summarizeViaServer(
     platformSource,
   });
   const serverSessionId = startResult.session.id;
-  // Record the last assistant message as an event before closing the
-  // session so it lands in the generation pipeline.
+  // A turn is an event, not an end: the server summarises at a compaction
+  // (pre-compact.ts) and at the session's end (session-end.ts).
   await runtime.client.recordEvent({
     projectId: runtime.projectId,
     serverSessionId,
@@ -96,8 +96,7 @@ async function summarizeViaServer(
       platformSource,
     },
   });
-  await runtime.client.endSession({ sessionId: serverSessionId });
-  logger.debug('HOOK', 'Summary request queued via server');
+  logger.debug('HOOK', 'Turn recorded via server');
   return { continue: true, suppressOutput: true, exitCode: HOOK_EXIT_CODES.SUCCESS };
 }
 
@@ -239,7 +238,7 @@ export const summarizeHandler: EventHandler = {
           logServerFallback(error.kind, {
             status: error.status,
             message: error.message,
-            route: '/v1/sessions/end',
+            route: '/v1/events',
           });
           // fall through to the worker spool
         } else {

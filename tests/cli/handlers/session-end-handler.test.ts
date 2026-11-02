@@ -9,6 +9,15 @@ const realWorkerUtilsSnapshot = { ...realWorkerUtils };
 const workerCallLog: Array<{ path: string; method: string; body: unknown; options: unknown }> = [];
 const nudgeLog: string[] = [];
 let useServerRuntime = false;
+const serverEndLog: Array<{ input: unknown; options: unknown }> = [];
+let serverEndFails = false;
+const serverClient = {
+  endSession: async (input: unknown, options: unknown) => {
+    serverEndLog.push({ input, options });
+    if (serverEndFails) throw new Error('ECONNREFUSED');
+    return {};
+  },
+};
 
 // SessionEnd spools and exits: any awaited worker call is a regression.
 mock.module('../../../src/shared/worker-utils.js', () => ({
@@ -30,7 +39,7 @@ mock.module('../../../src/shared/worker-utils.js', () => ({
 mock.module('../../../src/services/hooks/runtime-selector.js', () => ({
   ...realRuntimeSelectorSnapshot,
   resolveRuntimeContext: () => useServerRuntime
-    ? { runtime: 'server', projectId: 'server-project', serverBaseUrl: 'http://server.test', client: {} }
+    ? { runtime: 'server', projectId: 'server-project', serverBaseUrl: 'http://server.test', client: serverClient }
     : { runtime: 'worker' },
 }));
 
@@ -47,6 +56,8 @@ beforeEach(() => {
   workerCallLog.length = 0;
   nudgeLog.length = 0;
   useServerRuntime = false;
+  serverEndLog.length = 0;
+  serverEndFails = false;
   loggerSpies = [
     spyOn(logger, 'debug').mockImplementation(() => {}),
     spyOn(logger, 'warn').mockImplementation(() => {}),
@@ -113,6 +124,31 @@ describe('sessionEndHandler', () => {
     expect(result.continue).toBe(true);
     expect(result.suppressOutput).toBe(true);
     expect(workerCallLog).toHaveLength(0);
+    expect(spooledEntries()).toHaveLength(0);
+  });
+
+  it('ends the session on the server in one bounded request, by its own id, with the reason', async () => {
+    const { sessionEndHandler } = await import('../../../src/cli/handlers/session-end.js');
+    useServerRuntime = true;
+
+    await sessionEndHandler.execute({ sessionId: 'cc-end', cwd: '/tmp/p', platform: 'claude-code', reason: 'prompt_input_exit' });
+    await sessionEndHandler.execute({ sessionId: 'cc-end-2', cwd: '/tmp/p', platform: 'claude-code' });
+
+    expect(serverEndLog).toEqual([
+      { input: { sessionId: 'cc-end', projectId: 'server-project', reason: 'prompt_input_exit' }, options: { timeoutMs: 1_000 } },
+      { input: { sessionId: 'cc-end-2', projectId: 'server-project', reason: 'other' }, options: { timeoutMs: 1_000 } },
+    ]);
+  });
+
+  it('never fails SessionEnd when the server is unreachable', async () => {
+    const { sessionEndHandler } = await import('../../../src/cli/handlers/session-end.js');
+    useServerRuntime = true;
+    serverEndFails = true;
+
+    const result = await sessionEndHandler.execute({ sessionId: 'cc-down', cwd: '/tmp/p', platform: 'claude-code', reason: 'clear' });
+
+    expect(result.continue).toBe(true);
+    expect(serverEndLog).toHaveLength(1);
     expect(spooledEntries()).toHaveLength(0);
   });
 

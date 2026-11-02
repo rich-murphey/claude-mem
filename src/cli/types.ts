@@ -25,6 +25,8 @@ export interface NormalizedHookInput {
   permissionMode?: string;
   model?: string;
   sessionSource?: 'startup' | 'resume' | 'clear' | 'compact';
+  /** Claude Code PreCompact only: whether the user ran /compact or the context filled. */
+  compactTrigger?: 'manual' | 'auto';
   /** Raw hook event name from the payload (e.g. Kimi binds both Stop and PreCompact to the same internal event — handlers use this to tell them apart). */
   hookEventName?: string;
   filePath?: string;

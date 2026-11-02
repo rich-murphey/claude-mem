@@ -155,6 +155,23 @@ describe('ServerClient', () => {
     expect(captured[0]?.method).toBe('POST');
   });
 
+  it('endSession with a reason sends it and the projectId (a real end)', async () => {
+    installFetch(async () => new Response(JSON.stringify({ session: { id: 's' } }), { status: 200 }));
+    const client = new ServerClient({ serverBaseUrl: 'http://localhost:9999', apiKey: 'cmem_test' });
+    await client.endSession({ sessionId: 'cc-1', projectId: 'p1', reason: 'logout' });
+    expect(captured[0]?.url).toBe('http://localhost:9999/v1/sessions/cc-1/end');
+    expect(captured[0]?.body).toEqual({ reason: 'logout', projectId: 'p1' });
+  });
+
+  it('checkpointSession sends POST /v1/sessions/:id/checkpoint', async () => {
+    installFetch(async () => new Response(JSON.stringify({ session: { id: 's' } }), { status: 200 }));
+    const client = new ServerClient({ serverBaseUrl: 'http://localhost:9999', apiKey: 'cmem_test' });
+    await client.checkpointSession({ sessionId: 'sess-1', reason: 'compact', trigger: 'auto' });
+    expect(captured[0]?.url).toBe('http://localhost:9999/v1/sessions/sess-1/checkpoint');
+    expect(captured[0]?.method).toBe('POST');
+    expect(captured[0]?.body).toEqual({ reason: 'compact', trigger: 'auto' });
+  });
+
   it('throws transport error on fetch failure', async () => {
     globalThis.fetch = (async () => {
       throw new Error('ECONNREFUSED');

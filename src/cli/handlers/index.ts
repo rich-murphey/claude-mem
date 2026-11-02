@@ -17,6 +17,7 @@ import { userMessageHandler } from './user-message.js';
 import { fileEditHandler } from './file-edit.js';
 import { fileContextHandler } from './file-context.js';
 import { postCompactHandler } from './post-compact.js';
+import { preCompactHandler } from './pre-compact.js';
 import { subagentContextHandler } from './subagent-context.js';
 
 export type EventType =
@@ -31,6 +32,7 @@ export type EventType =
   | 'file-edit'
   | 'file-context'
   | 'post-compact'
+  | 'pre-compact'
   | 'subagent-context';
 
 export const sessionInitContextHandler: EventHandler = {
@@ -169,6 +171,7 @@ const handlers: Record<EventType, EventHandler> = {
   'file-edit': fileEditHandler,
   'file-context': fileContextHandler,
   'post-compact': postCompactHandler,
+  'pre-compact': preCompactHandler,
   'subagent-context': subagentContextHandler
 };
 
@@ -195,4 +198,5 @@ export { userMessageHandler } from './user-message.js';
 export { fileEditHandler } from './file-edit.js';
 export { fileContextHandler } from './file-context.js';
 export { postCompactHandler } from './post-compact.js';
+export { preCompactHandler } from './pre-compact.js';
 export { subagentContextHandler } from './subagent-context.js';

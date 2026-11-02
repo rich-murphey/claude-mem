@@ -60,6 +60,7 @@ mock.module('../../../src/shared/worker-utils.js', () => ({
 }));
 
 const serverEvents: unknown[] = [];
+let serverEnds = 0;
 mock.module('../../../src/services/hooks/runtime-selector.js', () => ({
   ...realRuntimeSelectorSnapshot,
   resolveRuntimeContext: () => runtimeMode === 'server'
@@ -70,7 +71,7 @@ mock.module('../../../src/services/hooks/runtime-selector.js', () => ({
         client: {
           startSession: async () => ({ session: { id: 'server-session' } }),
           recordEvent: async (event: unknown) => { serverEvents.push(event); return {}; },
-          endSession: async () => ({}),
+          endSession: async () => { serverEnds += 1; return {}; },
         },
       }
     : { runtime: 'worker' },
@@ -90,6 +91,7 @@ beforeEach(() => {
   tempSpool = useTempHookSpoolDataDir();
   workerCalls.length = 0;
   serverEvents.length = 0;
+  serverEnds = 0;
   captureSetting = 'false';
   runtimeMode = 'worker';
   loggerSpies = (['info', 'debug', 'warn', 'error', 'failure', 'dataIn'] as const)
@@ -182,5 +184,7 @@ describe('Stop hook advisor-call capture', () => {
     expect(workerCalls).toHaveLength(0);
     expect(spooledEntries()).toHaveLength(0);
     expect(serverEvents).toHaveLength(1);
+    // A turn is an event; the session ends at SessionEnd (session-end.ts).
+    expect(serverEnds).toBe(0);
   });
 });

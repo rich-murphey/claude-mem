@@ -69,6 +69,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
       // claude-mem must break. Honoring it (#3168) dropped the summary and the
       // advisor capture for every turn after such a hook fired.
       reason: pickStringField(r.reason),
+      compactTrigger: r.trigger === 'manual' || r.trigger === 'auto' ? r.trigger : undefined,
       agentId: pickAgentField(r.agent_id),
       agentType: pickAgentField(r.agent_type),
     };

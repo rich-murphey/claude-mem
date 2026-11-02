@@ -176,6 +176,23 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-mem",
+            "args": [
+              "hook",
+              "claude-code",
+              "pre-compact"
+            ],
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }
