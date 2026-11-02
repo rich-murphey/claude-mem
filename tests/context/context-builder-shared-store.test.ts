@@ -168,6 +168,15 @@ describe('the shared store as a row source', () => {
     expect(contextCalls.map(call => call.excludeSubagents)).toEqual([true, false]);
   });
 
+  it('sends the session id when it has one, and no key without', async () => {
+    await fetchServerContextRows(serverRuntime(), rowsRequest({ contentSessionId: 'cs-1' }));
+    await fetchServerContextRows(serverRuntime(), rowsRequest());
+    expect(contextCalls[0].contentSessionId).toBe('cs-1');
+    expect(Object.prototype.hasOwnProperty.call(contextCalls[1], 'contentSessionId')).toBe(false);
+    await generateServerSessionStartContext(serverRuntime(), { session_id: 'cs-2', cwd: '/tmp/demo', projects: ['demo'] } as never, { withTerminalRender: false, timeoutMs: 1_000 });
+    expect(contextCalls[2].contentSessionId).toBe('cs-2');
+  });
+
   it('bounds the request by the caller\'s timeout, and leaves the client default alone without one', async () => {
     await fetchServerContextRows(serverRuntime(), rowsRequest({ timeoutMs: 15_000 }));
     await fetchServerContextRows(serverRuntime(), rowsRequest());

@@ -53,9 +53,11 @@ export async function fetchServerContextRows(
     folderProjects: string[];
     platformSource: string | undefined;
     timeoutMs?: number;
+    /** The session the block is for; sent so the server can record it. */
+    contentSessionId?: string;
   },
 ): Promise<ServerContextRows | null> {
-  const { config, project, folderProjects, platformSource, timeoutMs } = request;
+  const { config, project, folderProjects, platformSource, timeoutMs, contentSessionId } = request;
   const wanted = config.totalObservationCount + config.sessionCount + SUMMARY_LOOKAHEAD;
   const limit = Math.max(1, Math.min(SERVER_CONTEXT_MAX_LIMIT, wanted));
   if (wanted > SERVER_CONTEXT_MAX_LIMIT) {
@@ -81,6 +83,7 @@ export async function fetchServerContextRows(
       folderProjects,
       excludeSubagents: config.mainAgentOnly,
       ...(platformSource ? { platformSource } : {}),
+      ...(contentSessionId ? { contentSessionId } : {}),
     }, timeoutMs === undefined ? {} : { timeoutMs });
     rows = Array.isArray(result?.observations) ? result.observations : [];
   } catch (error) {

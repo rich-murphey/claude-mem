@@ -195,6 +195,10 @@ export interface ServerContextObservationsRequest {
   folderProjects?: string[];
   // Leave out rows generated from subagent events (CLAUDE_MEM_CONTEXT_MAIN_AGENT_ONLY).
   excludeSubagents?: boolean;
+  // The Claude Code session the SessionStart read is for, as on
+  // /v1/context/semantic, so the server can record what it put there and
+  // not inject it again per prompt. Servers that ignore it see no change.
+  contentSessionId?: string | null;
 }
 
 export interface ServerContextObservationsResponse {
@@ -340,6 +344,7 @@ export class ServerClient {
       payload.folderProjects = input.folderProjects;
     }
     if (input.excludeSubagents !== undefined) payload.excludeSubagents = input.excludeSubagents;
+    if (input.contentSessionId) payload.contentSessionId = input.contentSessionId;
     return this.request<ServerContextObservationsResponse>('POST', '/v1/context', payload, options);
   }
 

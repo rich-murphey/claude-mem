@@ -512,6 +512,7 @@ async function readServerContext(
     folderProjects: scope.projects,
     platformSource: scope.platformSource,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(input?.session_id ? { contentSessionId: input.session_id } : {}),
   });
   return { scope, rows };
 }
