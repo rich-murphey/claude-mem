@@ -18,7 +18,7 @@ import { loadFromFileOnce as defaultLoadFromFileOnce } from '../../shared/hook-s
 import { normalizePlatformSource } from '../../shared/platform-source.js';
 import { SEMANTIC_CONTEXT_HOOK_MIN_QUERY_CHARS } from '../../shared/semantic-context.js';
 import { workStatePlatform } from '../../shared/work-state-telemetry.js';
-import { isCodexInternalPrompt, isGrokBotInternalPrompt, isInternalProtocolPayload } from '../../utils/tag-stripping.js';
+import { humanPromptText, isCodexInternalPrompt, isGrokBotInternalPrompt, isInteractiveEntrypoint, isInternalProtocolPayload } from '../../utils/tag-stripping.js';
 import {
   resolveRuntimeContext as defaultResolveRuntimeContext,
   logServerFallback as defaultLogServerFallback,
@@ -252,6 +252,7 @@ const sessionInit = {
         const recorded = recordServerPrompt(
           runtime,
           serverSessionId,
+          input,
           sessionId,
           platformSource,
           prompt,
@@ -440,20 +441,31 @@ async function startServerSession(
 }
 
 /**
- * Record the prompt as a `user_prompt` event with no generation job. The
- * client strips <private> and the other memory tags from the payload, as it
- * does for the prompt in the session's metadata. Never throws: a prompt is
- * never held up or failed by its record.
+ * Record the prompt as a `user_prompt` event with no generation job, only
+ * when a person typed it: a task notification, command output or peer
+ * message (humanPromptText), or any prompt of a `claude -p` / SDK run, is not
+ * recorded, and blocks injected into a real prompt (<system-reminder>, ...)
+ * are removed. The client also strips <private> and the other memory tags.
+ * The session's title and transcript path ride along so the server can name
+ * the session and find its transcript. Never throws: a prompt is never held
+ * up or failed by its record.
  */
 async function recordServerPrompt(
   runtime: ServerRuntimeContext,
   serverSessionId: string | undefined,
+  input: NormalizedHookInput,
   sessionId: string,
   platformSource: string,
-  prompt: string,
+  rawPrompt: string,
   timeoutMs: number,
 ): Promise<void> {
-  if (prompt === '[media prompt]' || timeoutMs < SESSION_INIT_MIN_REMAINING_TIMEOUT_MS) return;
+  if (rawPrompt === '[media prompt]' || timeoutMs < SESSION_INIT_MIN_REMAINING_TIMEOUT_MS) return;
+  if (!isInteractiveEntrypoint(dependencies.readHookEnvironment())) return;
+  const prompt = humanPromptText(rawPrompt);
+  if (!prompt) {
+    logger.debug('HOOK', 'session-init: not a typed prompt; not recorded', { preview: rawPrompt.slice(0, 40) });
+    return;
+  }
   try {
     await runtime.client.recordEvent({
       projectId: runtime.projectId,
@@ -463,7 +475,11 @@ async function recordServerPrompt(
       sourceType: 'hook',
       eventType: 'user_prompt',
       occurredAtEpoch: Date.now(),
-      payload: { prompt },
+      payload: {
+        prompt,
+        ...(input.sessionTitle ? { sessionTitle: input.sessionTitle } : {}),
+        ...(input.transcriptPath ? { transcriptPath: input.transcriptPath } : {}),
+      },
       generate: false,
     }, { timeoutMs });
   } catch (error: unknown) {

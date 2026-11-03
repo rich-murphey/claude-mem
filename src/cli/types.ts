@@ -15,6 +15,8 @@ export interface NormalizedHookInput {
    */
   toolUseId?: string;
   transcriptPath?: string;
+  /** Claude Code UserPromptSubmit: the session's title (`/rename` or a session-title hook), when it has one. */
+  sessionTitle?: string;
   /** Claude Code SubagentStop only: the finished subagent's own transcript (agent_transcript_path). */
   agentTranscriptPath?: string;
   lastAssistantMessage?: string;

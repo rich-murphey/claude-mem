@@ -1,6 +1,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import { stripMemoryTags, stripMemoryTagsFromJsonStrings, isInternalProtocolPayload, isCodexInternalPrompt, isGrokBotInternalPrompt } from '../../src/utils/tag-stripping.js';
+import { stripMemoryTags, stripMemoryTagsFromJsonStrings, isInternalProtocolPayload, isCodexInternalPrompt, isGrokBotInternalPrompt, humanPromptText, isInteractiveEntrypoint } from '../../src/utils/tag-stripping.js';
 import { logger } from '../../src/utils/logger.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
@@ -715,5 +715,28 @@ after`;
     it('leaves untagged strings byte-identical', () => {
       expect(stripMemoryTagsFromJsonStrings({ s: '\n  indented\n' })).toEqual({ s: '\n  indented\n' });
     });
+  });
+});
+
+describe('humanPromptText', () => {
+  it('drops what no person typed', () => {
+    expect(humanPromptText('<task-notification>\n<task-id>a1</task-id>\n</task-notification>')).toBeNull();
+    expect(humanPromptText('[Request interrupted by user]')).toBeNull();
+    expect(humanPromptText('Another Claude session sent a message:\n<cross-session-message from="x">hi</cross-session-message>')).toBeNull();
+    expect(humanPromptText('<system-reminder>only</system-reminder>')).toBeNull();
+  });
+  it('strips injected blocks and keeps pastes', () => {
+    expect(humanPromptText('fix it<system-reminder>\nx\n</system-reminder>')).toBe('fix it');
+    const paste = 'why?\n```\nerror: <T> mismatch\n```';
+    expect(humanPromptText(paste)).toBe(paste);
+    expect(humanPromptText('see <system-reminders> doc')).toBe('see <system-reminders> doc');
+  });
+  it('gives a slash command as typed', () => {
+    expect(humanPromptText('<command-message>start…</command-message>\n<command-name>/start</command-name>\n<command-args>docs/ui</command-args>')).toBe('/start docs/ui');
+  });
+  it('tells the interactive CLI from sdk runs', () => {
+    expect(isInteractiveEntrypoint({ CLAUDE_CODE_ENTRYPOINT: 'cli' })).toBe(true);
+    expect(isInteractiveEntrypoint({})).toBe(true);
+    expect(isInteractiveEntrypoint({ CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' })).toBe(false);
   });
 });

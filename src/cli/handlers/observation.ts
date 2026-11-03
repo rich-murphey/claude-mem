@@ -120,6 +120,9 @@ export const observationHandler: EventHandler = {
           agentType: input.agentType,
           platformSource,
           tool_use_id: input.toolUseId,
+          // Where the call is in the transcript (claude-mem-rs resolves the
+          // tool_use_id to transcript lines on the host that holds the file).
+          transcript_path: input.transcriptPath,
         }),
       };
       try {

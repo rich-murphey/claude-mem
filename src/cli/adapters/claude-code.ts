@@ -61,6 +61,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
       toolResponse: r.tool_response ?? failedToolResponse(r),
       toolUseId: typeof r.tool_use_id === 'string' ? r.tool_use_id : undefined,
       transcriptPath: r.transcript_path,
+      sessionTitle: pickStringField(r.session_title) || undefined,
       agentTranscriptPath: pickStringField(r.agent_transcript_path),
       // stop_hook_active is deliberately not mapped. Claude Code sets it once a
       // Stop hook has blocked the stop and Claude kept working. claude-mem's

@@ -205,8 +205,8 @@ describe('sessionInitHandler server semantic injection', () => {
   });
   // The script above as a template: the semantic stub, the budget and the
   // checks change; the prompt must still continue without the worker.
-  function runScenario(semanticContext: string, timeoutMs: number, checks: string, prompt = 'Please restore platform-aware context for this Cursor session.', recordEvent = `calls.recordEvent.push(input); return { event: { id: 'event-1' } };`): void {
-    const env = { ...process.env };
+  function runScenario(semanticContext: string, timeoutMs: number, checks: string, prompt = 'Please restore platform-aware context for this Cursor session.', recordEvent = `calls.recordEvent.push(input); return { event: { id: 'event-1' } };`, entrypoint = 'cli'): void {
+    const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: entrypoint };
     delete env.CLAUDE_MEM_INTERNAL;
     const script = `
       const calls = { semanticContext: 0, recordEvent: [] };
@@ -271,6 +271,18 @@ describe('sessionInitHandler server semantic injection', () => {
     runScenario(`return { context: '', count: 0 };`, SESSION_INIT_TIMEOUT_MS, `
       if (calls.semanticContext !== 1) throw new Error('semanticContext count ' + calls.semanticContext);
     `, 'explain RRF');
+  });
+
+  it('records only the typed words of a prompt, without injected blocks', () => {
+    runScenario(`return { context: '', count: 0 };`, SESSION_INIT_TIMEOUT_MS, `
+      if (calls.recordEvent.length !== 1 || calls.recordEvent[0].payload.prompt !== 'deploy the fix now') throw new Error('prompt not cleaned: ' + JSON.stringify(calls.recordEvent));
+    `, 'deploy the fix now<system-reminder>\\nhook context\\n</system-reminder>');
+  });
+
+  it('records no prompt of a claude -p run', () => {
+    runScenario(`return { context: '', count: 0 };`, SESSION_INIT_TIMEOUT_MS, `
+      if (calls.recordEvent.length !== 0) throw new Error('sdk prompt recorded: ' + JSON.stringify(calls.recordEvent));
+    `, 'In one sentence: what does the cutoff do?', undefined, 'sdk-cli');
   });
 
   it('skips the semantic call for a prompt under 8 characters, but records the prompt', () => {
