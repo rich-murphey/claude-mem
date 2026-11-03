@@ -154,7 +154,7 @@ describe('AgentFormatter', () => {
     it('should switch to display-only refs hint when fetch-by-id is unsupported', () => {
       const joined = renderAgentLegend(false).join('\n');
       expect(joined).toContain('short refs are display-only');
-      expect(joined).not.toContain('get_observations');
+      expect(joined).toContain('observation_search by title for the full ID, then get_observations');
     });
   });
 

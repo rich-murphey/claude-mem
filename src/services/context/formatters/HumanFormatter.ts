@@ -47,16 +47,15 @@ export function renderHumanColumnKey(): string[] {
 }
 
 export function renderHumanContextIndex(fetchByIdSupported: boolean = true): string[] {
-  // Server runtime: ids are UUIDs shown as 8-char display refs, and neither
-  // get_observations nor the mem-search skill's worker tools exist there; the
-  // server's own search tool covers both drill-down and history.
+  // Server runtime: ids are UUIDs shown as 8-char display refs, which no tool
+  // accepts; search returns the full id, which get_observations takes.
   const drilldownLines = fetchByIdSupported
     ? [
         `${colors.dim}  - Fetch by ID: get_observations([IDs]) for observations visible in this index${colors.reset}`,
         `${colors.dim}  - Search history: Use the mem-search skill for past decisions, bugs, and deeper research${colors.reset}`,
       ]
     : [
-        `${colors.dim}  - Search: observation_search by title or topic (short refs are display-only; server runtime has no fetch by ID)${colors.reset}`,
+        `${colors.dim}  - Search: observation_search by title or topic for the full ID, then get_observations([IDs]) (short refs are display-only)${colors.reset}`,
       ];
   return [
     `${colors.dim}Context Index: This semantic index (titles, types, files, tokens) is usually sufficient to understand past work.${colors.reset}`,

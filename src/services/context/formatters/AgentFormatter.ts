@@ -29,11 +29,11 @@ export function renderAgentLegend(fetchByIdSupported: boolean = true): string[] 
   const mode = ModeManager.getInstance().getActiveMode();
   const typeLegendItems = mode.observation_types.map(t => `${t.emoji}${t.id}`).join(' ');
 
-  // Server runtime: ids are UUIDs shown as 8-char display refs, and there is no
-  // by-id fetch, so point at the server's search tool instead.
+  // Server runtime: ids are UUIDs shown as 8-char display refs, which no tool
+  // accepts; search returns the full id, which get_observations takes.
   const fetchLine = fetchByIdSupported
     ? `Fetch details: get_observations([IDs]) | Search: mem-search skill`
-    : `Fetch details: observation_search by title (short refs are display-only)`;
+    : `Fetch details: observation_search by title for the full ID, then get_observations([IDs]) (short refs are display-only)`;
 
   return [
     `Legend: 🎯session ${typeLegendItems}`,
